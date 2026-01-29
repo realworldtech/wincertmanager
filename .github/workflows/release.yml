@@ -9,8 +9,34 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  # First job: Validate and lint (runs on any runner)
+  validate:
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install PowerShell
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+          $results = Invoke-ScriptAnalyzer -Path './scripts' -Recurse -ExcludeRule PSAvoidUsingWriteHost
+          if ($results) {
+            $results | Format-Table -AutoSize
+            throw "PSScriptAnalyzer found $($results.Count) issues"
+          }
+          Write-Host "PSScriptAnalyzer passed - no issues found"
+
+  # Second job: Sign and release (Windows required for Authenticode)
+  sign-and-release:
+    needs: validate
+    runs-on: windows-latest
+    environment: release  # Protected environment - requires approval
 
     steps:
       - name: Checkout code
@@ -18,36 +44,184 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF -replace 'refs/tags/v', ''
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Import code signing certificate
+        id: import-cert
+        shell: pwsh
+        env:
+          SIGNING_CERT_BASE64: ${{ secrets.SIGNING_CERT_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          # Only proceed if signing secrets are configured
+          if (-not $env:SIGNING_CERT_BASE64 -or -not $env:SIGNING_CERT_PASSWORD) {
+            Write-Host "::warning::Code signing secrets not configured - scripts will not be signed"
+            "SIGNING_AVAILABLE=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            return
+          }
+
+          # Decode and import certificate
+          $certBytes = [Convert]::FromBase64String($env:SIGNING_CERT_BASE64)
+          $certPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+
+          $securePassword = ConvertTo-SecureString $env:SIGNING_CERT_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePassword
+
+          # Clean up PFX file immediately
+          Remove-Item $certPath -Force
+
+          # Verify certificate is valid for code signing
+          if ($cert.EnhancedKeyUsageList.ObjectId -notcontains '1.3.6.1.5.5.7.3.3') {
+            throw "Certificate does not have Code Signing EKU"
+          }
+
+          if ($cert.NotAfter -lt (Get-Date)) {
+            throw "Code signing certificate has expired"
+          }
+
+          Write-Host "Certificate imported successfully: $($cert.Subject)"
+          Write-Host "Valid until: $($cert.NotAfter)"
+
+          # Export public certificate for users to verify signatures
+          $publicCertPath = Join-Path $env:GITHUB_WORKSPACE "rwts-codesign.cer"
+          Export-Certificate -Cert $cert -FilePath $publicCertPath | Out-Null
+          Write-Host "Exported public certificate to: $publicCertPath"
+
+          "SIGNING_AVAILABLE=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "CERT_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Sign PowerShell scripts
+        if: steps.import-cert.outputs.SIGNING_AVAILABLE == 'true'
+        shell: pwsh
+        env:
+          CERT_THUMBPRINT: ${{ steps.import-cert.outputs.CERT_THUMBPRINT }}
+        run: |
+          $cert = Get-ChildItem Cert:\CurrentUser\My\$env:CERT_THUMBPRINT
+          $timestamp = "http://timestamp.digicert.com"
+
+          $scripts = Get-ChildItem -Path ./scripts -Filter *.ps1 -Recurse
+          $signed = 0
+          $failed = 0
+
+          foreach ($script in $scripts) {
+            Write-Host "Signing: $($script.FullName)"
+            try {
+              $result = Set-AuthenticodeSignature -FilePath $script.FullName `
+                -Certificate $cert `
+                -TimestampServer $timestamp `
+                -HashAlgorithm SHA256
+
+              if ($result.Status -eq 'Valid') {
+                $signed++
+                Write-Host "  ✓ Signed successfully"
+              } else {
+                $failed++
+                Write-Host "  ✗ Signing failed: $($result.StatusMessage)"
+              }
+            } catch {
+              $failed++
+              Write-Host "  ✗ Error: $_"
+            }
+          }
+
+          Write-Host "`nSigning complete: $signed signed, $failed failed"
+
+          if ($failed -gt 0) {
+            throw "Failed to sign $failed script(s)"
+          }
 
       - name: Create release archive
+        shell: pwsh
         run: |
-          # Create a clean directory for the release
-          mkdir -p release/wincertmanager-${{ steps.version.outputs.VERSION }}
+          $version = "${{ steps.version.outputs.VERSION }}"
 
-          # Copy relevant files (exclude git, github workflows, etc.)
-          cp -r scripts release/wincertmanager-${{ steps.version.outputs.VERSION }}/
-          cp -r config release/wincertmanager-${{ steps.version.outputs.VERSION }}/
-          cp -r docs release/wincertmanager-${{ steps.version.outputs.VERSION }}/
-          cp -r examples release/wincertmanager-${{ steps.version.outputs.VERSION }}/
-          cp README.md release/wincertmanager-${{ steps.version.outputs.VERSION }}/
-          cp LICENSE release/wincertmanager-${{ steps.version.outputs.VERSION }}/
-          cp SECURITY.md release/wincertmanager-${{ steps.version.outputs.VERSION }}/
-          cp CLAUDE.md release/wincertmanager-${{ steps.version.outputs.VERSION }}/
+          # Create release directory
+          $releaseDir = "release/wincertmanager-$version"
+          New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+
+          # Copy relevant files
+          Copy-Item -Path scripts -Destination $releaseDir -Recurse
+          Copy-Item -Path config -Destination $releaseDir -Recurse
+          Copy-Item -Path docs -Destination $releaseDir -Recurse
+          Copy-Item -Path examples -Destination $releaseDir -Recurse
+          Copy-Item -Path README.md -Destination $releaseDir
+          Copy-Item -Path LICENSE -Destination $releaseDir
+          Copy-Item -Path SECURITY.md -Destination $releaseDir
+          Copy-Item -Path CLAUDE.md -Destination $releaseDir
 
           # Create ZIP archive
-          cd release
-          zip -r ../wincertmanager-${{ steps.version.outputs.VERSION }}.zip wincertmanager-${{ steps.version.outputs.VERSION }}
-          cd ..
+          $zipPath = "wincertmanager-$version.zip"
+          Compress-Archive -Path $releaseDir -DestinationPath $zipPath -Force
 
           # Create SHA256 checksum
-          sha256sum wincertmanager-${{ steps.version.outputs.VERSION }}.zip > wincertmanager-${{ steps.version.outputs.VERSION }}.zip.sha256
+          $hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
+          "$hash  wincertmanager-$version.zip" | Out-File -FilePath "$zipPath.sha256" -Encoding ascii
+
+          Write-Host "Created: $zipPath"
+          Write-Host "SHA256: $hash"
 
       - name: Generate release notes
         id: release_notes
+        shell: pwsh
+        env:
+          SIGNING_AVAILABLE: ${{ steps.import-cert.outputs.SIGNING_AVAILABLE }}
         run: |
-          cat << 'EOF' > release_notes.md
-          ## Windows Certificate Manager Toolkit ${{ steps.version.outputs.VERSION }}
+          $version = "${{ steps.version.outputs.VERSION }}"
+          $signed = $env:SIGNING_AVAILABLE -eq 'true'
+
+          $verificationSection = if ($signed) {
+            @"
+
+          ### Verification
+
+          **All PowerShell scripts are Authenticode signed.**
+
+          To trust the signing certificate (one-time setup, requires admin):
+
+          ``````powershell
+          # Import the public certificate to Trusted Publishers
+          Import-Certificate -FilePath .\rwts-codesign.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+          ``````
+
+          Verify script signatures:
+
+          ``````powershell
+          Get-ChildItem -Path .\scripts -Filter *.ps1 -Recurse |
+            Get-AuthenticateSignature |
+            Format-Table Path, Status
+          ``````
+
+          Verify the ZIP checksum:
+
+          ``````powershell
+          `$expected = (Get-Content .\wincertmanager-$version.zip.sha256 -Raw).Split(' ')[0]
+          `$actual = (Get-FileHash .\wincertmanager-$version.zip -Algorithm SHA256).Hash.ToLower()
+          if (`$expected -eq `$actual) { Write-Host "Checksum valid" -ForegroundColor Green }
+          ``````
+          "@
+          } else {
+            @"
+
+          ### Verification
+
+          Verify the download integrity using the SHA256 checksum:
+
+          ``````powershell
+          `$expected = (Get-Content .\wincertmanager-$version.zip.sha256 -Raw).Split(' ')[0]
+          `$actual = (Get-FileHash .\wincertmanager-$version.zip -Algorithm SHA256).Hash.ToLower()
+          if (`$expected -eq `$actual) { Write-Host "Checksum valid" -ForegroundColor Green }
+          ``````
+
+          > Note: Scripts in this release are not Authenticode signed.
+          "@
+          }
+
+          $notes = @"
+          ## Windows Certificate Manager Toolkit $version
 
           Automated SSL certificate management for Windows Server using Let's Encrypt via win-acme.
 
@@ -57,23 +231,29 @@ jobs:
           - LDAPS (Domain Controller certificates)
 
           ### Installation
-          1. Download and extract the ZIP file to `C:\Tools\wincertmanager`
-          2. Run `.\scripts\Prerequisites\Install-Prerequisites.ps1` as Administrator
+          1. Download and extract the ZIP file to ``C:\Tools\wincertmanager``
+          2. Run ``.\scripts\Prerequisites\Install-Prerequisites.ps1`` as Administrator
           3. Follow the [documentation](https://github.com/realworldtech/wincertmanager#readme)
+          $verificationSection
+          "@
 
-          ### Verification
-          Verify the download integrity using the SHA256 checksum file.
+          $notes | Out-File -FilePath release_notes.md -Encoding utf8
 
-          ```powershell
-          # PowerShell
-          (Get-FileHash .\wincertmanager-${{ steps.version.outputs.VERSION }}.zip -Algorithm SHA256).Hash
-          ```
-
-          Compare with the contents of `wincertmanager-${{ steps.version.outputs.VERSION }}.zip.sha256`
-          EOF
+      - name: Remove signing certificate
+        if: always() && steps.import-cert.outputs.SIGNING_AVAILABLE == 'true'
+        shell: pwsh
+        env:
+          CERT_THUMBPRINT: ${{ steps.import-cert.outputs.CERT_THUMBPRINT }}
+        run: |
+          # Clean up the certificate from the store
+          $cert = Get-ChildItem Cert:\CurrentUser\My\$env:CERT_THUMBPRINT -ErrorAction SilentlyContinue
+          if ($cert) {
+            Remove-Item $cert.PSPath -Force
+            Write-Host "Signing certificate removed from store"
+          }
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: v${{ steps.version.outputs.VERSION }}
           body_path: release_notes.md
@@ -82,5 +262,7 @@ jobs:
           files: |
             wincertmanager-${{ steps.version.outputs.VERSION }}.zip
             wincertmanager-${{ steps.version.outputs.VERSION }}.zip.sha256
+            rwts-codesign.cer
+          fail_on_unmatched_files: false  # Certificate only present when signing is configured
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

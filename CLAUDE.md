@@ -74,3 +74,15 @@ See `docs/security-review.md` for detailed security analysis. Key points:
 - P/Invoke for Credential Manager (avoids command-line exposure)
 - Path traversal protection on config file loading
 - DPAPI encryption for stored credentials
+
+## Release Process
+
+The release workflow (`.github/workflows/release.yml`):
+
+1. **Branch protection** on main requires PR reviews and passing CI
+2. **Tag push** (`v*`) triggers the release workflow
+3. **Protected environment** requires manual approval before signing
+4. **Authenticode signing** signs all `.ps1` files with timestamp
+5. **GitHub Release** publishes signed ZIP with SHA256 checksum and public certificate
+
+Signing secrets (`SIGNING_CERT_BASE64`, `SIGNING_CERT_PASSWORD`) are stored in the protected `release` environment.
