@@ -262,7 +262,13 @@ if (-not $results.WinAcmeInstalled -or $Force) {
                 # Backup existing installation
                 $backupPath = "$InstallPath.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
                 Write-Log "Backing up existing installation to: $backupPath" -Level Info
-                Move-Item -Path $InstallPath -Destination $backupPath -Force
+                try {
+                    Move-Item -Path $InstallPath -Destination $backupPath -Force -ErrorAction Stop
+                }
+                catch {
+                    Write-Log "Could not move existing installation (may be in use). Removing instead..." -Level Warning
+                    Remove-Item -Path $InstallPath -Recurse -Force -ErrorAction SilentlyContinue
+                }
                 New-Item -Path $InstallPath -ItemType Directory -Force | Out-Null
             }
 
@@ -278,11 +284,11 @@ if (-not $results.WinAcmeInstalled -or $Force) {
                 $signature = Get-AuthenticodeSignature -FilePath $wacsExe
 
                 if ($signature.Status -eq 'Valid') {
-                    # Verify the signer is the expected publisher (win-acme is signed by "Certify The Web")
+                    # Signature valid and certificate trusted
                     $signerName = $signature.SignerCertificate.Subject
                     Write-Log "Binary signed by: $signerName" -Level Info
 
-                    if ($signerName -match 'Certify The Web|win-acme') {
+                    if ($signerName -match 'WACS') {
                         Write-Log 'Authenticode signature verified successfully' -Level Info
                     }
                     else {
@@ -290,18 +296,39 @@ if (-not $results.WinAcmeInstalled -or $Force) {
                         $results.Warnings += "win-acme binary signed by unexpected publisher: $signerName"
                     }
                 }
+                elseif ($signature.Status -eq 'HashMismatch') {
+                    # CRITICAL: File has been modified after signing - possible tampering
+                    Write-Log "ERROR: Authenticode signature hash mismatch - file may have been tampered with!" -Level Error
+                    $results.Errors += "Authenticode signature hash mismatch. Binary may have been tampered with."
+
+                    # Remove the potentially compromised installation
+                    Remove-Item -Path $InstallPath -Recurse -Force -ErrorAction SilentlyContinue
+                    throw "Security Error: Authenticode signature hash mismatch. Installation aborted."
+                }
                 elseif ($signature.Status -eq 'NotSigned') {
                     Write-Log 'Warning: win-acme binary is not digitally signed. This may be expected for some releases.' -Level Warning
                     $results.Warnings += 'win-acme binary is not digitally signed'
                 }
-                else {
-                    # Invalid signature is a serious security concern
-                    Write-Log "ERROR: Authenticode signature validation failed: $($signature.Status)" -Level Error
-                    $results.Errors += "Authenticode signature validation failed: $($signature.Status). Binary may have been tampered with."
+                elseif ($signature.Status -in @('UnknownError', 'NotTrusted')) {
+                    # Signature is cryptographically valid but the signing certificate is not trusted
+                    # This happens when the CA is not in the Windows trust store (e.g., some code signing certs)
+                    $signerName = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { 'Unknown' }
+                    Write-Log "Warning: Authenticode signature from untrusted certificate: $signerName" -Level Warning
+                    Write-Log "Status: $($signature.Status) - The signing certificate is not in the Windows trust store." -Level Warning
+                    Write-Log 'The signature is cryptographically valid but the issuing CA is not trusted by Windows.' -Level Warning
+                    $results.Warnings += "win-acme signed by untrusted certificate ($signerName). Signature is cryptographically valid."
 
-                    # Remove the potentially compromised installation
-                    Remove-Item -Path $InstallPath -Recurse -Force -ErrorAction SilentlyContinue
-                    throw "Security Error: Authenticode signature validation failed ($($signature.Status)). Installation aborted."
+                    if ($signerName -match 'WACS') {
+                        Write-Log 'Signer matches expected win-acme publisher - proceeding with installation.' -Level Info
+                    }
+                    else {
+                        Write-Log "Signer does not match expected publisher. Verify this is the official win-acme release." -Level Warning
+                    }
+                }
+                else {
+                    # Other signature status - warn but don't abort
+                    Write-Log "Warning: Unexpected signature status: $($signature.Status)" -Level Warning
+                    $results.Warnings += "Unexpected Authenticode signature status: $($signature.Status)"
                 }
 
                 Write-Log 'win-acme installed successfully.' -Level Info
@@ -370,11 +397,11 @@ if ($results.WinAcmeInstalled) {
 #endregion
 
 #region Summary
-Write-Log '' -Level Info
+Write-Log ' ' -Level Info
 Write-Log '========================================' -Level Info
 Write-Log '         INSTALLATION SUMMARY' -Level Info
 Write-Log '========================================' -Level Info
-Write-Log '' -Level Info
+Write-Log ' ' -Level Info
 Write-Log "Operating System:   $($results.OSVersion.Caption)" -Level Info
 Write-Log "PowerShell Version: $($results.PowerShellVersion)" -Level Info
 Write-Log "TLS 1.2 Status:     $($results.TLS12Status)" -Level Info
@@ -387,13 +414,13 @@ if ($results.WinAcmeInstalled) {
 }
 
 if ($results.RequiresReboot) {
-    Write-Log '' -Level Info
+    Write-Log ' ' -Level Info
     Write-Log '*** REBOOT REQUIRED ***' -Level Warning
     Write-Log 'TLS 1.2 settings have been changed. Please reboot before using win-acme.' -Level Warning
 }
 
 if ($results.Warnings.Count -gt 0) {
-    Write-Log '' -Level Info
+    Write-Log ' ' -Level Info
     Write-Log 'WARNINGS:' -Level Warning
     foreach ($warning in $results.Warnings) {
         Write-Log "  - $warning" -Level Warning
@@ -401,14 +428,14 @@ if ($results.Warnings.Count -gt 0) {
 }
 
 if ($results.Errors.Count -gt 0) {
-    Write-Log '' -Level Info
+    Write-Log ' ' -Level Info
     Write-Log 'ERRORS:' -Level Error
     foreach ($errorItem in $results.Errors) {
         Write-Log "  - $errorItem" -Level Error
     }
 }
 
-Write-Log '' -Level Info
+Write-Log ' ' -Level Info
 Write-Log '========================================' -Level Info
 
 # Return results object

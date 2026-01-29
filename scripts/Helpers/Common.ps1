@@ -969,26 +969,28 @@ function Test-WindowsCredentialExists {
 }
 #endregion
 
-# Export functions
-Export-ModuleMember -Function @(
-    'Initialize-WinCertManager',
-    'Write-Log',
-    'Get-LoggingErrors',
-    'Get-OSVersion',
-    'Test-TLS12Enabled',
-    'Enable-TLS12',
-    'Get-DotNetVersion',
-    'Get-CertificateByThumbprint',
-    'Get-CertificateBySubject',
-    'Test-CertificateValid',
-    'Get-WinAcmePath',
-    'Test-IsAdministrator',
-    'Invoke-WithRetry',
-    'ConvertTo-SecureCredential',
-    'Get-SecureCredentialFile',
-    'Initialize-CredentialManager',
-    'Set-WindowsCredential',
-    'Get-WindowsCredential',
-    'Remove-WindowsCredential',
-    'Test-WindowsCredentialExists'
-)
+# Export functions only when loaded as a module (not when dot-sourced)
+if ($MyInvocation.MyCommand.ScriptBlock.Module) {
+    Export-ModuleMember -Function @(
+        'Initialize-WinCertManager',
+        'Write-Log',
+        'Get-LoggingErrors',
+        'Get-OSVersion',
+        'Test-TLS12Enabled',
+        'Enable-TLS12',
+        'Get-DotNetVersion',
+        'Get-CertificateByThumbprint',
+        'Get-CertificateBySubject',
+        'Test-CertificateValid',
+        'Get-WinAcmePath',
+        'Test-IsAdministrator',
+        'Invoke-WithRetry',
+        'ConvertTo-SecureCredential',
+        'Get-SecureCredentialFile',
+        'Initialize-CredentialManager',
+        'Set-WindowsCredential',
+        'Get-WindowsCredential',
+        'Remove-WindowsCredential',
+        'Test-WindowsCredentialExists'
+    )
+}
