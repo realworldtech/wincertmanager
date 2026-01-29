@@ -16,11 +16,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install PowerShell
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
       - name: Run PSScriptAnalyzer
         shell: pwsh
         run: |
@@ -101,7 +96,7 @@ jobs:
           CERT_THUMBPRINT: ${{ steps.import-cert.outputs.CERT_THUMBPRINT }}
         run: |
           $cert = Get-ChildItem Cert:\CurrentUser\My\$env:CERT_THUMBPRINT
-          $timestamp = "http://timestamp.digicert.com"
+          $timestamp = "https://timestamp.digicert.com"
 
           $scripts = Get-ChildItem -Path ./scripts -Filter *.ps1 -Recurse
           $signed = 0
@@ -152,6 +147,7 @@ jobs:
           Copy-Item -Path LICENSE -Destination $releaseDir
           Copy-Item -Path SECURITY.md -Destination $releaseDir
           Copy-Item -Path CLAUDE.md -Destination $releaseDir
+          Copy-Item -Path certs -Destination $releaseDir -Recurse
 
           # Create ZIP archive
           $zipPath = "wincertmanager-$version.zip"
@@ -184,14 +180,14 @@ jobs:
 
           ``````powershell
           # Import the public certificate to Trusted Publishers
-          Import-Certificate -FilePath .\rwts-codesign.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+          Import-Certificate -FilePath .\certs\rwts-codesign.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
           ``````
 
           Verify script signatures:
 
           ``````powershell
           Get-ChildItem -Path .\scripts -Filter *.ps1 -Recurse |
-            Get-AuthenticateSignature |
+            Get-AuthenticodeSignature |
             Format-Table Path, Status
           ``````
 
