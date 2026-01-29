@@ -93,22 +93,17 @@ $domain = $Identifier.ToLower().Trim()
 Write-Log "Retrieving acme-dns credentials for domain: $domain" -Level Verbose
 
 try {
-    # Suppress console output from Get-AcmeDnsCredential
+    # Retrieve credentials via Get-AcmeDnsCredential.ps1
+    $getCredScript = Join-Path $PSScriptRoot 'Get-AcmeDnsCredential.ps1'
+    if (-not (Test-Path $getCredScript)) {
+        throw "Get-AcmeDnsCredential.ps1 was not found in '$PSScriptRoot'. Cannot retrieve acme-dns credentials."
+    }
+
+    # Suppress verbose/warning output during credential retrieval
     $credential = & {
         $WarningPreference = 'SilentlyContinue'
         $VerbosePreference = 'SilentlyContinue'
-
-        # Use the Get-AcmeDnsCredential script or function
-        $getCredScript = Join-Path $PSScriptRoot 'Get-AcmeDnsCredential.ps1'
-        if (Test-Path $getCredScript) {
-            & $getCredScript -Domain $domain -AsPlainText 6>&1 | Out-Null
-            # Re-run to get the actual result (first run outputs to console)
-            & $getCredScript -Domain $domain -AsPlainText
-        }
-        else {
-            # Fall back to function if available
-            Get-AcmeDnsCredential -Domain $domain -AsPlainText
-        }
+        & $getCredScript -Domain $domain -AsPlainText
     }
 }
 catch {
@@ -129,8 +124,8 @@ if (-not $credential.Password) {
 # Build acme-dns update URL
 $acmeDnsServer = $credential.AcmeDnsServer
 if (-not $acmeDnsServer) {
-    # Default to Real World Technology Solutions acme-dns server
-    $acmeDnsServer = 'https://acmedns.realworld.net.au'
+    # Default to public acme-dns server
+    $acmeDnsServer = 'https://auth.acme-dns.io'
     Write-Log "No AcmeDnsServer in credentials, using default: $acmeDnsServer" -Level Warning
 }
 

@@ -17,10 +17,11 @@ Download the latest signed release from [GitHub Releases](https://github.com/rea
 1. Download `wincertmanager-x.x.x.zip` and `wincertmanager-x.x.x.zip.sha256`
 2. Verify the SHA256 checksum
 3. Extract to `C:\Tools\wincertmanager` (or your preferred location)
-4. Import the signing certificate to trusted root (optional, for signature validation):
+4. (Optional) To trust the toolkit's code-signing certificate for signature validation:
    ```powershell
-   Import-Certificate -FilePath C:\Tools\wincertmanager\certs\rwts-codesign.cer -CertStoreLocation Cert:\LocalMachine\Root
+   Import-Certificate -FilePath C:\Tools\wincertmanager\certs\rwts-codesign.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
    ```
+   Note: `TrustedPublisher` is more appropriate than `Root` - it trusts this certificate for code signing only, not as a CA. Using `LocalMachine` ensures the SYSTEM account (used for scheduled renewals) also trusts the certificate.
 
 ### 1. Prepare the Server
 
@@ -48,7 +49,7 @@ This will:
 .\scripts\AcmeDns\Register-AcmeDns.ps1 -Domain "server.example.com"
 
 # Add the CNAME record shown in the output to your DNS provider
-# _acme-challenge.server.example.com -> <subdomain>.acmedns.realworld.net.au
+# _acme-challenge.server.example.com -> <subdomain>.auth.acme-dns.io
 ```
 
 ### 3. Request Certificate
@@ -123,18 +124,26 @@ acme-dns delegates only the ACME challenge subdomain, providing:
 - Simple one-time CNAME setup
 - Works reliably on Domain Controllers and internal servers
 
-RWTS acme-dns server: `https://acmedns.realworld.net.au`
+Public acme-dns server: `https://auth.acme-dns.io`
+
+You can also run your own acme-dns server or use a third-party hosted one.
 
 #### Setup Steps
 
 1. **Register with acme-dns:**
    ```powershell
+   # Using the public acme-dns server (default)
    .\scripts\AcmeDns\Register-AcmeDns.ps1 -Domain "server.example.com"
+
+   # Or specify a custom acme-dns server with API authentication
+   .\scripts\AcmeDns\Register-AcmeDns.ps1 -Domain "server.example.com" `
+       -AcmeDnsServer "https://acme-dns.example.com" `
+       -ApiKey "your-api-key" -ApiKeyId "your-key-id"
    ```
 
 2. **Add the CNAME record** shown in the output to your DNS:
    ```
-   _acme-challenge.server.example.com. CNAME <subdomain>.acmedns.realworld.net.au.
+   _acme-challenge.server.example.com. CNAME <subdomain>.auth.acme-dns.io.
    ```
 
 3. **Request certificate** using the script validation method (see examples below)
@@ -146,7 +155,7 @@ This toolkit uses **script-based DNS validation** with win-acme rather than win-
 - Uses WinCertManager's secure DPAPI-encrypted credential storage
 - Avoids issues with win-acme's preliminary DNS validation on Domain Controllers
 
-The `Update-AcmeDnsTxt.ps1` script is configured for the RWTS acme-dns server by default. For other acme-dns servers, modify the script or credential storage as needed.
+The `Update-AcmeDnsTxt.ps1` script reads the acme-dns server URL from the stored credentials, so it works with any acme-dns server you registered with.
 
 ### CloudFlare
 

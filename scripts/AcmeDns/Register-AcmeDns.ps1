@@ -12,11 +12,19 @@
     The domain name to register (e.g., www.example.com).
 
 .PARAMETER AcmeDnsServer
-    The acme-dns server URL. Default: https://acmedns.realworld.net.au
+    The acme-dns server URL. Default: https://auth.acme-dns.io
 
 .PARAMETER StorageMethod
     How to store the credentials: CredentialManager or JsonFile.
     Default: JsonFile (DPAPI encrypted)
+
+.PARAMETER ApiKey
+    API key for authenticated acme-dns servers. Required for RWTS acme-dns.
+    Format: acmedns_xxxxx...
+
+.PARAMETER ApiKeyId
+    API key ID for authenticated acme-dns servers. Required for RWTS acme-dns.
+    Format: key_xxxxx...
 
 .PARAMETER Force
     Overwrite existing credentials if they exist.
@@ -26,6 +34,9 @@
 
 .EXAMPLE
     .\Register-AcmeDns.ps1 -Domain 'mail.example.com' -AcmeDnsServer 'https://auth.acme-dns.io'
+
+.EXAMPLE
+    .\Register-AcmeDns.ps1 -Domain 'dc01.internal.example.com' -ApiKey 'acmedns_xxx' -ApiKeyId 'key_xxx'
 
 .NOTES
     Author: Real World Technology Solutions
@@ -41,11 +52,17 @@ param(
     [string]$Domain,
 
     [Parameter()]
-    [string]$AcmeDnsServer = 'https://acmedns.realworld.net.au',
+    [string]$AcmeDnsServer = 'https://auth.acme-dns.io',
 
     [Parameter()]
     [ValidateSet('CredentialManager', 'JsonFile')]
     [string]$StorageMethod = 'JsonFile',
+
+    [Parameter()]
+    [string]$ApiKey,
+
+    [Parameter()]
+    [string]$ApiKeyId,
 
     [Parameter()]
     [switch]$Force
@@ -101,9 +118,27 @@ $registerUrl = "$($AcmeDnsServer.TrimEnd('/'))/register"
 
 Write-Log "Calling acme-dns register endpoint: $registerUrl" -Level Verbose
 
+# Build headers for authenticated acme-dns servers
+$headers = @{
+    'Content-Type' = 'application/json'
+}
+if ($ApiKey) {
+    $headers['X-Api-Key'] = $ApiKey
+    Write-Log 'Using API key authentication' -Level Verbose
+}
+if ($ApiKeyId) {
+    $headers['X-Api-User'] = $ApiKeyId
+}
+
 try {
     $response = Invoke-WithRetry -Description 'acme-dns registration' -ScriptBlock {
-        Invoke-RestMethod -Uri $registerUrl -Method Post -ContentType 'application/json' -UseBasicParsing
+        $params = @{
+            Uri             = $registerUrl
+            Method          = 'Post'
+            Headers         = $headers
+            UseBasicParsing = $true
+        }
+        Invoke-RestMethod @params
     }
 }
 catch {
