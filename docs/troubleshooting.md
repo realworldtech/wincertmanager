@@ -101,6 +101,44 @@ Invoke-WebRequest -Uri "https://acmedns.realworld.net.au/health" -UseBasicParsin
 
 ## DNS Validation Issues
 
+### Preliminary Validation Fails on Domain Controllers
+
+**Symptoms:**
+```
+Preliminary validation failed on all nameservers
+[syd03-ad01] Incorrect TXT record(s) found
+```
+The TXT record was created successfully on acme-dns, but win-acme reports validation failure.
+
+**Cause:**
+Win-acme uses the system's DNS servers for preliminary validation. On a Domain Controller, the system DNS is typically itself (127.0.0.1 or the DC's IP). The DC's DNS cannot resolve external acme-dns subdomains, so validation fails even though the record exists on public DNS.
+
+**Diagnosis:**
+```powershell
+# Check what DNS servers win-acme is using
+Get-Content "C:\Tools\win-acme\settings.json" | Select-String "DnsServers"
+
+# Test resolution via system DNS vs public DNS
+Resolve-DnsName _acme-challenge.yourserver.example.com -Type TXT
+Resolve-DnsName _acme-challenge.yourserver.example.com -Type TXT -Server 8.8.8.8
+```
+
+**Solution:**
+Configure win-acme to use public DNS servers for validation. Edit `C:\Tools\win-acme\settings.json`:
+
+```json
+{
+  "Validation": {
+    "DnsServers": [ "8.8.8.8", "1.1.1.1" ],
+    ...
+  }
+}
+```
+
+Change `"DnsServers": [ "[System]" ]` to `"DnsServers": [ "8.8.8.8", "1.1.1.1" ]`.
+
+This applies to any server using internal DNS that cannot resolve external zones.
+
 ### CNAME Record Not Found
 
 **Symptoms:**
@@ -230,6 +268,20 @@ Let's Encrypt certificates include Server Authentication EKU by default. If miss
 3. Verify new certificate has correct EKU
 
 ## win-acme Issues
+
+### win-acme Download Deleted by Install Script
+
+**Symptoms:**
+- `Install-Prerequisites.ps1` downloads win-acme but then deletes it
+- Error about "Authenticode signature validation failed"
+
+**Cause:**
+Win-acme is signed by "WACS" with a self-signed certificate. If this certificate is not in the Windows trust store, the signature status returns `UnknownError` instead of `Valid`. Older versions of the toolkit treated this as a security failure.
+
+**Solution:**
+Update to the latest version of the toolkit (v1.0.2+), which correctly handles untrusted but cryptographically valid signatures. The script now only rejects downloads with `HashMismatch` (actual tampering).
+
+If you must use an older version, manually download win-acme from https://www.win-acme.com/ and extract to `C:\Tools\win-acme\`.
 
 ### win-acme Won't Start
 

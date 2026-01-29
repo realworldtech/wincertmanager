@@ -139,7 +139,7 @@ else {
 if (-not $certificate) {
     $errorMsg = "Certificate not found. Thumbprint: $Thumbprint, Subject: $Subject"
     Write-Log $errorMsg -Level Error
-    Send-Event -EventType 'Failure' -Domain ($Subject ?? $computerSystem.Domain) -Thumbprint $Thumbprint -Message $errorMsg -Status 'Error'
+    Send-Event -EventType 'Failure' -Domain $(if ($Subject) { $Subject } else { $computerSystem.Domain }) -Thumbprint $Thumbprint -Message $errorMsg -Status 'Error'
     throw $errorMsg
 }
 
