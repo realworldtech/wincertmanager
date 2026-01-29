@@ -86,6 +86,10 @@ jobs:
           Export-Certificate -Cert $cert -FilePath $publicCertPath | Out-Null
           Write-Host "Exported public certificate to: $publicCertPath"
 
+          # Import self-signed cert to Trusted Root so signature validation passes
+          Import-Certificate -FilePath $publicCertPath -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Write-Host "Added certificate to Trusted Root store"
+
           "SIGNING_AVAILABLE=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "CERT_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
@@ -241,12 +245,21 @@ jobs:
         env:
           CERT_THUMBPRINT: ${{ steps.import-cert.outputs.CERT_THUMBPRINT }}
         run: |
-          # Clean up the certificate from the store
+          # Clean up certificate from CurrentUser\My store (contains private key)
           $cert = Get-ChildItem Cert:\CurrentUser\My\$env:CERT_THUMBPRINT -ErrorAction SilentlyContinue
           if ($cert) {
             Remove-Item $cert.PSPath -Force
-            Write-Host "Signing certificate removed from store"
+            Write-Host "Signing certificate removed from CurrentUser\My"
           }
+
+          # Clean up from Trusted Root store
+          $rootCert = Get-ChildItem Cert:\LocalMachine\Root\$env:CERT_THUMBPRINT -ErrorAction SilentlyContinue
+          if ($rootCert) {
+            Remove-Item $rootCert.PSPath -Force
+            Write-Host "Certificate removed from Trusted Root store"
+          }
+
+          # Note: rwts-codesign.cer (public cert) is kept - needed for release upload and is non-sensitive
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
