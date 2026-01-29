@@ -6,6 +6,9 @@ logging-config.json
 config/acme-dns/*.json
 !config/acme-dns/README.md
 
+# Local development files (certificates, passwords, etc.)
+.local/
+
 # Windows/PowerShell artifacts
 *.log
 *.tmp
