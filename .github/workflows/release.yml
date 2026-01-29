@@ -96,7 +96,7 @@ jobs:
           CERT_THUMBPRINT: ${{ steps.import-cert.outputs.CERT_THUMBPRINT }}
         run: |
           $cert = Get-ChildItem Cert:\CurrentUser\My\$env:CERT_THUMBPRINT
-          $timestamp = "https://timestamp.digicert.com"
+          $timestamp = "http://timestamp.digicert.com"  # Must use HTTP - HTTPS fails in PowerShell 7
 
           $scripts = Get-ChildItem -Path ./scripts -Filter *.ps1 -Recurse
           $signed = 0
