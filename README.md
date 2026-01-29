@@ -219,7 +219,10 @@ This toolkit is maintained by Real World Technology Solutions.
 
 ## License
 
-Proprietary - RWTS Internal Use
+This project is licensed under [CC BY-NC 4.0](LICENSE) (Creative Commons Attribution-NonCommercial 4.0).
+
+- **Free for non-commercial use** with attribution
+- **Commercial use** requires permission from [Real World Technology Solutions](https://rwts.com.au)
 
 ## References
 
