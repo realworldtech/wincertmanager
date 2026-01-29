@@ -21,6 +21,11 @@
 .PARAMETER ForceRebind
     Force NTDS to rebind to the certificate (triggers service notification).
 
+.PARAMETER StrictSslValidation
+    When testing LDAPS connectivity, perform strict SSL/TLS validation including
+    certificate chain verification. By default, validation is relaxed to allow
+    testing with self-signed or internal CA certificates.
+
 .PARAMETER WhatIf
     Shows what would happen without making changes.
 
@@ -56,7 +61,10 @@ param(
     [switch]$TestConnection,
 
     [Parameter()]
-    [switch]$ForceRebind
+    [switch]$ForceRebind,
+
+    [Parameter()]
+    [switch]$StrictSslValidation
 )
 
 # Import common functions
@@ -226,9 +234,18 @@ if ($TestConnection) {
             Write-Log 'TCP connection to port 636 successful' -Level Info
 
             # Test SSL/TLS handshake
-            # Callback parameters required by RemoteCertificateValidationCallback delegate signature
-            $sslStream = New-Object System.Net.Security.SslStream($tcpClient.GetStream(), $false,
-                { param($_sender, $_certificate, $_chain, $_sslPolicyErrors) return $true })
+            # Create SSL stream with appropriate validation callback
+            if ($StrictSslValidation) {
+                Write-Log 'Using strict SSL/TLS validation' -Level Info
+                # Use default validation (strict) - validates certificate chain, expiry, etc.
+                $sslStream = New-Object System.Net.Security.SslStream($tcpClient.GetStream(), $false)
+            }
+            else {
+                Write-Log 'Using relaxed SSL/TLS validation (use -StrictSslValidation for full chain validation)' -Level Verbose
+                # Callback parameters required by RemoteCertificateValidationCallback delegate signature
+                $sslStream = New-Object System.Net.Security.SslStream($tcpClient.GetStream(), $false,
+                    { param($_sender, $_certificate, $_chain, $_sslPolicyErrors) return $true })
+            }
 
             try {
                 $sslStream.AuthenticateAsClient('localhost')

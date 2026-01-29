@@ -15,6 +15,7 @@
 # Script-level variables
 $script:LogPath = Join-Path $env:ProgramData 'WinCertManager\Logs'
 $script:ConfigPath = Join-Path $env:ProgramData 'WinCertManager\Config'
+$script:LoggingErrors = @()  # Track logging failures for diagnostic purposes
 
 function Initialize-WinCertManager {
     <#
@@ -82,8 +83,23 @@ function Write-Log {
     }
     $logFilePath = Join-Path $script:LogPath $LogFile
 
-    # Write to log file
-    Add-Content -Path $logFilePath -Value $logEntry -ErrorAction SilentlyContinue
+    # Write to log file with error tracking
+    try {
+        Add-Content -Path $logFilePath -Value $logEntry -ErrorAction Stop
+    }
+    catch {
+        # Track the logging failure for diagnostics
+        $loggingError = [PSCustomObject]@{
+            Timestamp = $timestamp
+            Target = 'LogFile'
+            Path = $logFilePath
+            Error = $_.Exception.Message
+        }
+        $script:LoggingErrors += $loggingError
+
+        # Attempt to write to console as fallback
+        Write-Verbose "Could not write to log file '$logFilePath': $($_.Exception.Message)"
+    }
 
     # Write to console based on level
     switch ($Level) {
@@ -101,10 +117,17 @@ function Write-Log {
             if (-not [System.Diagnostics.EventLog]::SourceExists('WinCertManager')) {
                 [System.Diagnostics.EventLog]::CreateEventSource('WinCertManager', 'Application')
             }
-            Write-EventLog -LogName Application -Source 'WinCertManager' -EventId 1000 -EntryType $eventType -Message $Message -ErrorAction SilentlyContinue
+            Write-EventLog -LogName Application -Source 'WinCertManager' -EventId 1000 -EntryType $eventType -Message $Message -ErrorAction Stop
         }
         catch {
-            # Silently continue if event log writing fails (e.g., insufficient permissions)
+            # Track the event log failure for diagnostics
+            $loggingError = [PSCustomObject]@{
+                Timestamp = $timestamp
+                Target = 'EventLog'
+                Path = 'Application'
+                Error = $_.Exception.Message
+            }
+            $script:LoggingErrors += $loggingError
             Write-Verbose "Could not write to event log: $($_.Exception.Message)"
         }
     }
@@ -560,10 +583,397 @@ function Get-SecureCredentialFile {
     return Join-Path (Join-Path $script:ConfigPath 'acme-dns') "$Name.json"
 }
 
+function Get-LoggingErrors {
+    <#
+    .SYNOPSIS
+        Retrieves any logging errors that occurred during the session.
+
+    .DESCRIPTION
+        Returns a collection of logging errors that were suppressed during operation.
+        This helps administrators diagnose issues with file or event log permissions.
+
+    .PARAMETER Clear
+        If specified, clears the error collection after returning.
+
+    .EXAMPLE
+        Get-LoggingErrors
+        Returns all logging errors from the current session.
+
+    .EXAMPLE
+        Get-LoggingErrors -Clear
+        Returns all logging errors and clears the collection.
+    #>
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
+        Justification = 'Function returns a collection of errors')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '',
+        Justification = 'Returns PSCustomObject[] or empty array')]
+    [OutputType([PSCustomObject[]])]
+    param(
+        [Parameter()]
+        [switch]$Clear
+    )
+
+    $errors = $script:LoggingErrors
+
+    if ($Clear) {
+        $script:LoggingErrors = @()
+    }
+
+    if ($errors.Count -eq 0) {
+        Write-Verbose 'No logging errors recorded'
+        return @()
+    }
+
+    Write-Warning "$($errors.Count) logging error(s) occurred during this session"
+    return $errors
+}
+
+#region Windows Credential Manager Functions
+# P/Invoke definitions for Windows Credential Manager API
+# This avoids using cmdkey which exposes credentials on the command line
+
+$script:CredentialManagerTypeAdded = $false
+
+function Initialize-CredentialManager {
+    <#
+    .SYNOPSIS
+        Initializes the Credential Manager P/Invoke types.
+
+    .DESCRIPTION
+        Adds the necessary .NET types for interacting with Windows Credential Manager
+        via the advapi32.dll CredWrite and CredRead functions.
+    #>
+    [CmdletBinding()]
+    param()
+
+    if ($script:CredentialManagerTypeAdded) {
+        return
+    }
+
+    $credManagerCode = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace WinCertManager
+{
+    public enum CredentialType : uint
+    {
+        Generic = 1,
+        DomainPassword = 2,
+        DomainCertificate = 3,
+        DomainVisiblePassword = 4,
+        GenericCertificate = 5,
+        DomainExtended = 6,
+        Maximum = 7,
+        MaximumEx = (Maximum + 1000)
+    }
+
+    public enum CredentialPersist : uint
+    {
+        Session = 1,
+        LocalMachine = 2,
+        Enterprise = 3
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct NativeCredential
+    {
+        public uint Flags;
+        public CredentialType Type;
+        public IntPtr TargetName;
+        public IntPtr Comment;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+        public uint CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public CredentialPersist Persist;
+        public uint AttributeCount;
+        public IntPtr Attributes;
+        public IntPtr TargetAlias;
+        public IntPtr UserName;
+    }
+
+    public class CredentialManager
+    {
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool CredWriteW(ref NativeCredential credential, uint flags);
+
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool CredReadW(string target, CredentialType type, uint reservedFlag, out IntPtr credentialPtr);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool CredDeleteW(string target, CredentialType type, uint flags);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern void CredFree(IntPtr buffer);
+
+        public static bool WriteCredential(string target, string username, string password)
+        {
+            byte[] passwordBytes = Encoding.Unicode.GetBytes(password);
+
+            NativeCredential cred = new NativeCredential();
+            cred.Type = CredentialType.Generic;
+            cred.TargetName = Marshal.StringToCoTaskMemUni(target);
+            cred.UserName = Marshal.StringToCoTaskMemUni(username);
+            cred.CredentialBlobSize = (uint)passwordBytes.Length;
+            cred.CredentialBlob = Marshal.AllocCoTaskMem(passwordBytes.Length);
+            Marshal.Copy(passwordBytes, 0, cred.CredentialBlob, passwordBytes.Length);
+            cred.Persist = CredentialPersist.LocalMachine;
+
+            bool result = false;
+            try
+            {
+                result = CredWriteW(ref cred, 0);
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(cred.TargetName);
+                Marshal.FreeCoTaskMem(cred.UserName);
+                // Securely clear the password from memory
+                Marshal.Copy(new byte[passwordBytes.Length], 0, cred.CredentialBlob, passwordBytes.Length);
+                Marshal.FreeCoTaskMem(cred.CredentialBlob);
+            }
+
+            return result;
+        }
+
+        public static bool DeleteCredential(string target)
+        {
+            return CredDeleteW(target, CredentialType.Generic, 0);
+        }
+
+        public static string[] ReadCredential(string target)
+        {
+            IntPtr credPtr;
+            if (!CredReadW(target, CredentialType.Generic, 0, out credPtr))
+            {
+                return null;
+            }
+
+            try
+            {
+                NativeCredential cred = (NativeCredential)Marshal.PtrToStructure(credPtr, typeof(NativeCredential));
+                string username = Marshal.PtrToStringUni(cred.UserName);
+                string password = null;
+
+                if (cred.CredentialBlobSize > 0)
+                {
+                    password = Marshal.PtrToStringUni(cred.CredentialBlob, (int)cred.CredentialBlobSize / 2);
+                }
+
+                return new string[] { username, password };
+            }
+            finally
+            {
+                CredFree(credPtr);
+            }
+        }
+
+        public static bool CredentialExists(string target)
+        {
+            IntPtr credPtr;
+            if (CredReadW(target, CredentialType.Generic, 0, out credPtr))
+            {
+                CredFree(credPtr);
+                return true;
+            }
+            return false;
+        }
+    }
+}
+'@
+
+    try {
+        Add-Type -TypeDefinition $credManagerCode -Language CSharp -ErrorAction Stop
+        $script:CredentialManagerTypeAdded = $true
+    }
+    catch {
+        if ($_.Exception.Message -notmatch 'already exists') {
+            throw
+        }
+        $script:CredentialManagerTypeAdded = $true
+    }
+}
+
+function Set-WindowsCredential {
+    <#
+    .SYNOPSIS
+        Stores a credential in Windows Credential Manager securely.
+
+    .DESCRIPTION
+        Uses the Windows Credential Manager API via P/Invoke to store credentials
+        without exposing them on the command line. This is more secure than using
+        cmdkey.exe which passes credentials as command-line arguments.
+
+    .PARAMETER Target
+        The target name (identifier) for the credential.
+
+    .PARAMETER Username
+        The username to store.
+
+    .PARAMETER SecurePassword
+        The password as a SecureString.
+
+    .PARAMETER WhatIf
+        Shows what would happen without making changes.
+
+    .PARAMETER Confirm
+        Prompts for confirmation before making changes.
+
+    .EXAMPLE
+        $secPwd = ConvertTo-SecureString "password" -AsPlainText -Force
+        Set-WindowsCredential -Target "acme-dns:example.com" -Username "user" -SecurePassword $secPwd
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Target,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Username,
+
+        [Parameter(Mandatory = $true)]
+        [System.Security.SecureString]$SecurePassword
+    )
+
+    Initialize-CredentialManager
+
+    if (-not $PSCmdlet.ShouldProcess($Target, 'Store credential in Windows Credential Manager')) {
+        return $false
+    }
+
+    # Convert SecureString to plain text for the API call
+    # The C# code will securely clear this from memory after use
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePassword)
+    try {
+        $password = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        $result = [WinCertManager.CredentialManager]::WriteCredential($Target, $Username, $password)
+
+        if (-not $result) {
+            $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            Write-Log "Failed to write credential to Credential Manager. Error code: $errorCode" -Level Error
+        }
+
+        return $result
+    }
+    finally {
+        # Securely clear the BSTR
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+}
+
+function Get-WindowsCredential {
+    <#
+    .SYNOPSIS
+        Retrieves a credential from Windows Credential Manager.
+
+    .DESCRIPTION
+        Uses the Windows Credential Manager API via P/Invoke to retrieve credentials.
+
+    .PARAMETER Target
+        The target name (identifier) for the credential.
+
+    .PARAMETER AsPlainText
+        If specified, returns the password as plain text. Use with caution.
+
+    .OUTPUTS
+        PSCredential object, or PSCustomObject with Username and Password if AsPlainText is specified.
+    #>
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
+        Justification = 'Password is retrieved from secure Credential Manager API and converted to SecureString for PSCredential')]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Target,
+
+        [Parameter()]
+        [switch]$AsPlainText
+    )
+
+    Initialize-CredentialManager
+
+    $result = [WinCertManager.CredentialManager]::ReadCredential($Target)
+
+    if ($null -eq $result) {
+        return $null
+    }
+
+    $username = $result[0]
+    $password = $result[1]
+
+    if ($AsPlainText) {
+        Write-Log "Credential retrieved as plain text for target: $Target" -Level Warning
+        return [PSCustomObject]@{
+            Username = $username
+            Password = $password
+        }
+    }
+
+    # Return as PSCredential with SecureString password
+    $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
+    return New-Object System.Management.Automation.PSCredential($username, $securePassword)
+}
+
+function Remove-WindowsCredential {
+    <#
+    .SYNOPSIS
+        Removes a credential from Windows Credential Manager.
+
+    .PARAMETER Target
+        The target name (identifier) for the credential to remove.
+
+    .PARAMETER WhatIf
+        Shows what would happen without making changes.
+
+    .PARAMETER Confirm
+        Prompts for confirmation before making changes.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Target
+    )
+
+    Initialize-CredentialManager
+
+    if (-not $PSCmdlet.ShouldProcess($Target, 'Remove credential from Windows Credential Manager')) {
+        return $false
+    }
+
+    return [WinCertManager.CredentialManager]::DeleteCredential($Target)
+}
+
+function Test-WindowsCredentialExists {
+    <#
+    .SYNOPSIS
+        Tests if a credential exists in Windows Credential Manager.
+
+    .PARAMETER Target
+        The target name (identifier) to check.
+    #>
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
+        Justification = 'Exists is a standard verb pattern, not a plural noun')]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Target
+    )
+
+    Initialize-CredentialManager
+
+    return [WinCertManager.CredentialManager]::CredentialExists($Target)
+}
+#endregion
+
 # Export functions
 Export-ModuleMember -Function @(
     'Initialize-WinCertManager',
     'Write-Log',
+    'Get-LoggingErrors',
     'Get-OSVersion',
     'Test-TLS12Enabled',
     'Enable-TLS12',
@@ -575,5 +985,10 @@ Export-ModuleMember -Function @(
     'Test-IsAdministrator',
     'Invoke-WithRetry',
     'ConvertTo-SecureCredential',
-    'Get-SecureCredentialFile'
+    'Get-SecureCredentialFile',
+    'Initialize-CredentialManager',
+    'Set-WindowsCredential',
+    'Get-WindowsCredential',
+    'Remove-WindowsCredential',
+    'Test-WindowsCredentialExists'
 )

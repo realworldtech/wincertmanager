@@ -273,6 +273,37 @@ if (-not $results.WinAcmeInstalled -or $Force) {
             # Verify installation
             $wacsExe = Join-Path $InstallPath 'wacs.exe'
             if (Test-Path $wacsExe) {
+                # SECURITY: Verify Authenticode signature before trusting the binary
+                Write-Log 'Verifying Authenticode signature...' -Level Info
+                $signature = Get-AuthenticodeSignature -FilePath $wacsExe
+
+                if ($signature.Status -eq 'Valid') {
+                    # Verify the signer is the expected publisher (win-acme is signed by "Certify The Web")
+                    $signerName = $signature.SignerCertificate.Subject
+                    Write-Log "Binary signed by: $signerName" -Level Info
+
+                    if ($signerName -match 'Certify The Web|win-acme') {
+                        Write-Log 'Authenticode signature verified successfully' -Level Info
+                    }
+                    else {
+                        Write-Log "Warning: Binary signed by unexpected publisher: $signerName" -Level Warning
+                        $results.Warnings += "win-acme binary signed by unexpected publisher: $signerName"
+                    }
+                }
+                elseif ($signature.Status -eq 'NotSigned') {
+                    Write-Log 'Warning: win-acme binary is not digitally signed. This may be expected for some releases.' -Level Warning
+                    $results.Warnings += 'win-acme binary is not digitally signed'
+                }
+                else {
+                    # Invalid signature is a serious security concern
+                    Write-Log "ERROR: Authenticode signature validation failed: $($signature.Status)" -Level Error
+                    $results.Errors += "Authenticode signature validation failed: $($signature.Status). Binary may have been tampered with."
+
+                    # Remove the potentially compromised installation
+                    Remove-Item -Path $InstallPath -Recurse -Force -ErrorAction SilentlyContinue
+                    throw "Security Error: Authenticode signature validation failed ($($signature.Status)). Installation aborted."
+                }
+
                 Write-Log 'win-acme installed successfully.' -Level Info
                 $results.WinAcmeInstalled = $true
 

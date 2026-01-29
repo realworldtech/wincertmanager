@@ -146,24 +146,39 @@ switch ($storedData.StorageMethod) {
     }
 
     'CredentialManager' {
-        # Retrieve from Windows Credential Manager
+        # Retrieve from Windows Credential Manager using secure P/Invoke API
         $targetName = $storedData.CredentialTarget
         try {
-            # Use cmdkey to check if credential exists (can't retrieve password easily without additional modules)
-            $cmdkeyOutput = cmdkey /list:$targetName 2>&1
-            if ($cmdkeyOutput -match 'Target:') {
-                Write-Log 'Credential exists in Credential Manager' -Level Verbose
-                if ($AsPlainText) {
-                    Write-Warning 'Password stored in Credential Manager cannot be retrieved as plain text. Use CredentialManager PowerShell module for full access.'
-                    $password = '[Stored in Credential Manager]'
+            if (-not (Test-WindowsCredentialExists -Target $targetName)) {
+                Write-Error "Credential not found in Credential Manager: $targetName"
+                return $null
+            }
+
+            Write-Log 'Credential exists in Credential Manager' -Level Verbose
+
+            if ($AsPlainText) {
+                $credential = Get-WindowsCredential -Target $targetName -AsPlainText
+                if ($credential) {
+                    $password = $credential.Password
+                    # Update username from Credential Manager if different
+                    if ($credential.Username -and $credential.Username -ne $storedData.Username) {
+                        $storedData.Username = $credential.Username
+                    }
                 }
                 else {
-                    $password = $null  # Not directly accessible
+                    Write-Warning 'Could not retrieve credential from Credential Manager'
+                    $password = $null
                 }
             }
             else {
-                Write-Error "Credential not found in Credential Manager: $targetName"
-                return $null
+                $credential = Get-WindowsCredential -Target $targetName
+                if ($credential) {
+                    $password = $credential.Password  # This is a SecureString
+                    $storedData.Username = $credential.UserName
+                }
+                else {
+                    $password = $null
+                }
             }
         }
         catch {

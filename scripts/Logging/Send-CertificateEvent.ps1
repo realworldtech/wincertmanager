@@ -76,6 +76,12 @@ else {
     exit 1
 }
 
+# Allowed config directories for security (prevent path traversal)
+$allowedConfigDirs = @(
+    (Join-Path $env:ProgramData 'WinCertManager'),
+    (Resolve-Path (Join-Path $PSScriptRoot '..\..') -ErrorAction SilentlyContinue).Path
+) | Where-Object { $_ }
+
 # Default config path
 if (-not $ConfigPath) {
     # Check multiple locations
@@ -96,12 +102,31 @@ if (-not $ConfigPath) {
 # Load configuration
 $config = $null
 if ($ConfigPath -and (Test-Path $ConfigPath)) {
-    try {
-        $config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-        Write-Log "Loaded logging configuration from: $ConfigPath" -Level Verbose
+    # SECURITY: Validate ConfigPath is within allowed directories
+    $resolvedPath = (Resolve-Path $ConfigPath -ErrorAction SilentlyContinue).Path
+    $isAllowed = $false
+
+    if ($resolvedPath) {
+        foreach ($allowedDir in $allowedConfigDirs) {
+            if ($allowedDir -and $resolvedPath.StartsWith($allowedDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $isAllowed = $true
+                break
+            }
+        }
     }
-    catch {
-        Write-Log "Failed to load logging configuration: $($_.Exception.Message)" -Level Warning
+
+    if (-not $isAllowed) {
+        Write-Log "ConfigPath '$ConfigPath' is outside allowed directories. Ignoring custom config." -Level Warning
+        $ConfigPath = $null
+    }
+    else {
+        try {
+            $config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+            Write-Log "Loaded logging configuration from: $ConfigPath" -Level Verbose
+        }
+        catch {
+            Write-Log "Failed to load logging configuration: $($_.Exception.Message)" -Level Warning
+        }
     }
 }
 

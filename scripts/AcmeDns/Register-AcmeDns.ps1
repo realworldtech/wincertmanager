@@ -119,14 +119,16 @@ if (-not $response.subdomain -or -not $response.username -or -not $response.pass
 
 Write-Log 'Registration successful. Storing credentials...' -Level Info
 
-# Prepare credential data
+# SECURITY: Convert password to SecureString immediately to minimize plaintext exposure
+$securePassword = ConvertTo-SecureString -String $response.password -AsPlainText -Force
+
+# Prepare credential metadata (no plaintext password stored in this object)
 $credentialData = [PSCustomObject]@{
     Domain = $Domain
     AcmeDnsServer = $AcmeDnsServer
     Subdomain = $response.subdomain
     FullDomain = $response.fulldomain
     Username = $response.username
-    Password = $response.password
     AllowFrom = $response.allowfrom
     RegisteredAt = (Get-Date).ToString('o')
 }
@@ -135,7 +137,6 @@ $credentialData = [PSCustomObject]@{
 switch ($StorageMethod) {
     'JsonFile' {
         # Use DPAPI encryption for the password
-        $securePassword = ConvertTo-SecureString -String $response.password -AsPlainText -Force
         $encryptedPassword = ConvertFrom-SecureString -SecureString $securePassword
 
         $storageData = [PSCustomObject]@{
@@ -155,22 +156,22 @@ switch ($StorageMethod) {
     }
 
     'CredentialManager' {
-        # Store in Windows Credential Manager
+        # Store in Windows Credential Manager using secure API (not cmdkey)
         $targetName = "acme-dns:$Domain"
 
         # Remove existing credential if present
-        try {
-            cmdkey /delete:$targetName 2>$null | Out-Null
-        }
-        catch {
-            # Ignore errors when credential doesn't exist
-            Write-Verbose "No existing credential to remove: $($_.Exception.Message)"
+        $null = Remove-WindowsCredential -Target $targetName
+
+        # Add new credential using secure P/Invoke API
+        # This avoids exposing the password on the command line
+        $stored = Set-WindowsCredential -Target $targetName -Username $response.username -SecurePassword $securePassword
+
+        if (-not $stored) {
+            Write-Log 'Failed to store credential in Windows Credential Manager' -Level Error
+            throw 'Failed to store credential in Windows Credential Manager'
         }
 
-        # Add new credential
-        cmdkey /generic:$targetName /user:$($response.username) /pass:$($response.password) | Out-Null
-
-        # Store additional metadata in JSON file
+        # Store additional metadata in JSON file (no sensitive data)
         $metadataFile = Get-SecureCredentialFile -Name "$Domain.meta"
         $metadata = [PSCustomObject]@{
             Domain = $credentialData.Domain
