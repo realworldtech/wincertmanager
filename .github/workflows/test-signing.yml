@@ -90,5 +90,15 @@ jobs:
             Write-Host $_.ScriptStackTrace
             exit 1
           } finally {
+            # Clean up PFX file
             Remove-Item $certPath -Force -ErrorAction SilentlyContinue
+
+            # Clean up certificate from store
+            if ($cert) {
+              $storeCert = Get-ChildItem Cert:\CurrentUser\My\$($cert.Thumbprint) -ErrorAction SilentlyContinue
+              if ($storeCert) {
+                Remove-Item $storeCert.PSPath -Force
+                Write-Host "`nCertificate removed from store"
+              }
+            }
           }
