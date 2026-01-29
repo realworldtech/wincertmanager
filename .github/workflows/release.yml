@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create release archive
+        run: |
+          # Create a clean directory for the release
+          mkdir -p release/wincertmanager-${{ steps.version.outputs.VERSION }}
+
+          # Copy relevant files (exclude git, github workflows, etc.)
+          cp -r scripts release/wincertmanager-${{ steps.version.outputs.VERSION }}/
+          cp -r config release/wincertmanager-${{ steps.version.outputs.VERSION }}/
+          cp -r docs release/wincertmanager-${{ steps.version.outputs.VERSION }}/
+          cp -r examples release/wincertmanager-${{ steps.version.outputs.VERSION }}/
+          cp README.md release/wincertmanager-${{ steps.version.outputs.VERSION }}/
+          cp LICENSE release/wincertmanager-${{ steps.version.outputs.VERSION }}/
+          cp SECURITY.md release/wincertmanager-${{ steps.version.outputs.VERSION }}/
+          cp CLAUDE.md release/wincertmanager-${{ steps.version.outputs.VERSION }}/
+
+          # Create ZIP archive
+          cd release
+          zip -r ../wincertmanager-${{ steps.version.outputs.VERSION }}.zip wincertmanager-${{ steps.version.outputs.VERSION }}
+          cd ..
+
+          # Create SHA256 checksum
+          sha256sum wincertmanager-${{ steps.version.outputs.VERSION }}.zip > wincertmanager-${{ steps.version.outputs.VERSION }}.zip.sha256
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat << 'EOF' > release_notes.md
+          ## Windows Certificate Manager Toolkit ${{ steps.version.outputs.VERSION }}
+
+          Automated SSL certificate management for Windows Server using Let's Encrypt via win-acme.
+
+          ### Supported Services
+          - IIS site bindings
+          - Remote Desktop Gateway
+          - LDAPS (Domain Controller certificates)
+
+          ### Installation
+          1. Download and extract the ZIP file to `C:\Tools\wincertmanager`
+          2. Run `.\scripts\Prerequisites\Install-Prerequisites.ps1` as Administrator
+          3. Follow the [documentation](https://github.com/realworldtech/wincertmanager#readme)
+
+          ### Verification
+          Verify the download integrity using the SHA256 checksum file.
+
+          ```powershell
+          # PowerShell
+          (Get-FileHash .\wincertmanager-${{ steps.version.outputs.VERSION }}.zip -Algorithm SHA256).Hash
+          ```
+
+          Compare with the contents of `wincertmanager-${{ steps.version.outputs.VERSION }}.zip.sha256`
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: v${{ steps.version.outputs.VERSION }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-rc') }}
+          files: |
+            wincertmanager-${{ steps.version.outputs.VERSION }}.zip
+            wincertmanager-${{ steps.version.outputs.VERSION }}.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
