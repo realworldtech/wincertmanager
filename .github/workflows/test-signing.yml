@@ -1,0 +1,94 @@
+name: Test Signing
+
+on:
+  workflow_dispatch:  # Manual trigger only
+
+jobs:
+  test-sign:
+    runs-on: windows-latest
+    environment: release
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test certificate and signing
+        shell: pwsh
+        env:
+          SIGNING_CERT_BASE64: ${{ secrets.SIGNING_CERT_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          # Decode certificate
+          $certBytes = [Convert]::FromBase64String($env:SIGNING_CERT_BASE64)
+          $certPath = Join-Path $env:RUNNER_TEMP "test-codesign.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+
+          Write-Host "=== PFX file size: $((Get-Item $certPath).Length) bytes ==="
+
+          # Try to import
+          Write-Host "`n=== Importing certificate ==="
+          $securePassword = ConvertTo-SecureString $env:SIGNING_CERT_PASSWORD -AsPlainText -Force
+
+          try {
+            $cert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePassword
+            Write-Host "Certificate imported: $($cert.Subject)"
+            Write-Host "Thumbprint: $($cert.Thumbprint)"
+            Write-Host "Has private key: $($cert.HasPrivateKey)"
+            Write-Host "Not after: $($cert.NotAfter)"
+
+            # Check key usage
+            Write-Host "`n=== Key Usage ==="
+            Write-Host "Enhanced Key Usage: $($cert.EnhancedKeyUsageList | ForEach-Object { $_.FriendlyName })"
+
+            # Try to sign a test script WITHOUT timestamp
+            Write-Host "`n=== Test 1: Signing WITHOUT timestamp server ==="
+            $testScript = Join-Path $env:RUNNER_TEMP "test-script.ps1"
+            "Write-Host 'Hello World'" | Out-File -FilePath $testScript -Encoding utf8
+
+            $result = Set-AuthenticodeSignature -FilePath $testScript `
+              -Certificate $cert `
+              -HashAlgorithm SHA256
+
+            Write-Host "Status: $($result.Status)"
+            Write-Host "Message: $($result.StatusMessage)"
+
+            # Try WITH timestamp server (HTTP)
+            Write-Host "`n=== Test 2: Signing WITH HTTP timestamp server ==="
+            $testScript2 = Join-Path $env:RUNNER_TEMP "test-script2.ps1"
+            "Write-Host 'Hello World'" | Out-File -FilePath $testScript2 -Encoding utf8
+
+            $result2 = Set-AuthenticodeSignature -FilePath $testScript2 `
+              -Certificate $cert `
+              -HashAlgorithm SHA256 `
+              -TimestampServer "http://timestamp.digicert.com"
+
+            Write-Host "Status: $($result2.Status)"
+            Write-Host "Message: $($result2.StatusMessage)"
+
+            # Try WITH timestamp server (HTTPS)
+            Write-Host "`n=== Test 3: Signing WITH HTTPS timestamp server ==="
+            $testScript3 = Join-Path $env:RUNNER_TEMP "test-script3.ps1"
+            "Write-Host 'Hello World'" | Out-File -FilePath $testScript3 -Encoding utf8
+
+            $result3 = Set-AuthenticodeSignature -FilePath $testScript3 `
+              -Certificate $cert `
+              -HashAlgorithm SHA256 `
+              -TimestampServer "https://timestamp.digicert.com"
+
+            Write-Host "Status: $($result3.Status)"
+            Write-Host "Message: $($result3.StatusMessage)"
+
+            # Summary
+            Write-Host "`n=== Summary ==="
+            Write-Host "Without timestamp: $($result.Status)"
+            Write-Host "HTTP timestamp: $($result2.Status)"
+            Write-Host "HTTPS timestamp: $($result3.Status)"
+
+          } catch {
+            Write-Host "Error: $_" -ForegroundColor Red
+            Write-Host $_.Exception.GetType().FullName
+            Write-Host $_.ScriptStackTrace
+            exit 1
+          } finally {
+            Remove-Item $certPath -Force -ErrorAction SilentlyContinue
+          }
