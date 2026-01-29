@@ -1,0 +1,28 @@
+# Windows Certificate Manager Toolkit
+
+# Credentials and secrets
+*.credential
+logging-config.json
+config/acme-dns/*.json
+!config/acme-dns/README.md
+
+# Windows/PowerShell artifacts
+*.log
+*.tmp
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# PDF output directory (generated docs)
+pdf/

@@ -1,0 +1,230 @@
+# win-acme LDAPS Certificate Configuration Example
+# This shows a typical interactive session for configuring LDAPS on a Domain Controller
+
+================================================================================
+C:\Tools\win-acme> .\wacs.exe
+================================================================================
+
+A simple Windows ACMEv2 client (WACS)
+Software version x.x.x.x
+Connecting to https://acme-v02.api.letsencrypt.org/...
+
+Please report issues at https://github.com/win-acme/win-acme
+
+ N: Create certificate (default settings)
+ M: Create certificate (full options)
+ R: Run renewals (0 currently due)
+ A: Manage renewals (0 total)
+ O: More options...
+ Q: Quit
+
+Please choose from the menu: M
+
+================================================================================
+ Running in mode: Interactive, Advanced
+================================================================================
+
+ Please specify how the list of domain names that will be included in the
+ certificate should be determined.
+
+ 1: Read bindings from IIS
+ 2: Manual input
+ 3: CSR created by another program
+ 4: Apache-style configuration file
+
+ How shall we determine the domain(s) to include in the certificate?: 2
+
+================================================================================
+ Source plugin: Manual
+================================================================================
+
+ Enter comma separated list of host names, starting with the primary one: dc01.example.com
+
+ NOTE: For LDAPS, the certificate subject must match the Domain Controller's
+ FQDN. Internal-only domain names (.local) cannot use Let's Encrypt certificates.
+
+ Target generated using plugin Manual
+
+ Suggested friendly name '[dc01.example.com]', press <Enter> to accept or
+ type a new name: DC01 LDAPS Certificate
+
+================================================================================
+ Please select which validation plugin should be used.
+================================================================================
+
+ 1: [http-01] Save verification files on (network) path
+ 2: [http-01] Serve verification files from memory
+ 3: [http-01] Serve verification files with self-hosting
+ 4: [dns-01] Create verification records with acme-dns
+ 5: [dns-01] Create verification records with CloudFlare
+ 6: [dns-01] Create verification records manually
+ 7: [tls-alpn-01] Answer TLS-ALPN challenge from memory
+
+ How would you like to validate?: 5
+
+================================================================================
+ Validation plugin: CloudFlare
+================================================================================
+
+ CloudFlare API Token: ************************************
+
+ Token validated successfully for zone: example.com
+
+================================================================================
+ Please select which store plugin(s) should be used.
+================================================================================
+
+ 1: Windows Certificate Store (Local Computer)
+ 2: PEM files (Apache, nginx, etc.)
+ 3: PFX archive
+ 4: Central Certificate Store (IIS)
+ 5: No (additional) store steps
+
+ How would you like to store the certificate(s)?: 1
+
+================================================================================
+ Store plugin: CertificateStore
+================================================================================
+
+ Use the default certificate store? (y*/n): y
+
+ NOTE: For LDAPS, certificates should be stored in LocalMachine\My (Personal).
+ Active Directory automatically detects certificates with Server Authentication
+ EKU in this store.
+
+================================================================================
+ Please select which installation plugin(s) should be used.
+================================================================================
+
+ 1: IIS
+ 2: Windows CNG/API
+ 3: Create or update https bindings in IIS
+ 4: Run a custom script
+ 5: Update bindings on FTP site
+ 6: No (additional) installation steps
+
+ Which installation step should run first?: 4
+
+================================================================================
+ Installation plugin: Script
+================================================================================
+
+ Enter the path to the script you want to run after renewal: C:\Tools\wincertmanager\scripts\PostRenewal\Update-LDAPS.ps1
+
+ Parameters: -Thumbprint {CertThumbprint} -TestConnection
+
+ NOTE: The Update-LDAPS.ps1 script verifies the certificate has the correct EKU
+ and optionally tests LDAPS connectivity. Active Directory typically picks up
+ new certificates automatically.
+
+ Add another installation step? (y/n*): n
+
+================================================================================
+ Terms of service
+================================================================================
+
+ Open in default application? (y/n*): n
+
+ Do you agree with the terms of service? (y*/n): y
+
+================================================================================
+ Account
+================================================================================
+
+ Enter email address (for notifications about issues and renewals): admin@example.com
+
+================================================================================
+ Creating certificate
+================================================================================
+
+ Authorizing...
+ Authorizing dc01.example.com using dns-01 validation
+ Creating TXT record for _acme-challenge.dc01.example.com
+ Waiting for DNS propagation...
+ ACME validation complete
+ Cleaning up DNS record...
+ Requesting certificate...
+ Certificate [DC01 LDAPS Certificate] created
+
+ Certificate details:
+   Subject: CN=dc01.example.com
+   Issuer: R3 (Let's Encrypt)
+   Valid: 2024-01-20 to 2024-04-19
+   EKU: Server Authentication, Client Authentication
+
+================================================================================
+ Installing certificate in store
+================================================================================
+
+ Adding certificate to store My
+
+================================================================================
+ Running installation script
+================================================================================
+
+ Running script C:\Tools\wincertmanager\scripts\PostRenewal\Update-LDAPS.ps1
+ with parameters: -Thumbprint ABC123DEF456... -TestConnection
+
+ [2024-01-20 10:30:15] [Info] Starting LDAPS certificate verification
+ [2024-01-20 10:30:15] [Info] Domain Controller: DC01 in domain example.com
+ [2024-01-20 10:30:15] [Info] Found certificate: CN=dc01.example.com
+ [2024-01-20 10:30:16] [Info] Certificate has Server Authentication EKU (OK)
+ [2024-01-20 10:30:16] [Info] Testing LDAPS connectivity on port 636...
+ [2024-01-20 10:30:17] [Info] TCP connection to port 636 successful
+ [2024-01-20 10:30:17] [Info] LDAPS certificate thumbprint matches expected
+ [2024-01-20 10:30:17] [Info] LDAPS certificate verified successfully
+
+ ========================================
+   LDAPS CERTIFICATE VERIFICATION
+ ========================================
+
+   Domain Controller: DC01
+   Domain:            dc01.example.com
+   Thumbprint:        ABC123DEF456...
+   Expires:           2024-04-19
+   Days Left:         89
+   Server Auth EKU:   Yes
+   LDAPS Test:        Passed
+
+ Script finished with exit code 0
+
+================================================================================
+ Certificate installed successfully!
+================================================================================
+
+ Next renewal scheduled at 2024-04-10
+
+ NOTE: Active Directory monitors the certificate store and should automatically
+ start using the new certificate. If LDAPS doesn't work, try restarting the
+ NTDS service (this causes a brief AD interruption):
+   Restart-Service NTDS -Force
+
+================================================================================
+# Command line equivalent for automation:
+#
+# wacs.exe --target manual --host dc01.example.com ^
+#     --friendlyname "DC01 LDAPS Certificate" ^
+#     --validation cloudflare ^
+#     --cloudflareapitoken "your-api-token-here" ^
+#     --store certificatestore ^
+#     --installation script ^
+#     --script "C:\Tools\wincertmanager\scripts\PostRenewal\Update-LDAPS.ps1" ^
+#     --scriptparameters "-Thumbprint {CertThumbprint} -TestConnection" ^
+#     --emailaddress admin@example.com ^
+#     --accepttos
+================================================================================
+
+# For Multiple Domain Controllers:
+# --------------------------------
+# Each DC needs its own certificate. Run the above on each DC with the
+# appropriate hostname (dc01.example.com, dc02.example.com, etc.)
+#
+# Alternative with acme-dns:
+# -------------------------
+# wacs.exe --target manual --host dc01.example.com ^
+#     --validation acme-dns ^
+#     --acmednsserver "https://acmedns.realworld.net.au" ^
+#     --store certificatestore ^
+#     --installation script ^
+#     --script "C:\Tools\wincertmanager\scripts\PostRenewal\Update-LDAPS.ps1" ^
+#     --scriptparameters "-Thumbprint {CertThumbprint} -TestConnection"

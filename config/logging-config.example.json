@@ -1,0 +1,55 @@
+{
+  "enabled": false,
+  "description": "Central logging configuration for WinCertManager. Copy this file to logging-config.json and customize.",
+
+  "webhook": {
+    "enabled": true,
+    "url": "https://monitoring.example.com/api/cert-events",
+    "apiKey": "your-api-key-here",
+    "headers": {
+      "X-Custom-Header": "optional-custom-value"
+    },
+    "description": "HTTP webhook endpoint for certificate events. Events are sent as JSON POST requests."
+  },
+
+  "syslog": {
+    "enabled": false,
+    "server": "syslog.example.com",
+    "port": 514,
+    "protocol": "UDP",
+    "description": "Syslog server for certificate events. Supports UDP and TCP protocols."
+  },
+
+  "eventSchema": {
+    "description": "Schema of events sent to webhook/syslog endpoints",
+    "fields": {
+      "Timestamp": "ISO 8601 timestamp of the event",
+      "Hostname": "Name of the server where the event occurred",
+      "EventType": "Type of event: Renewal, Failure, Expiring, Installation, AcmeDnsRegistration",
+      "Domain": "The domain/certificate subject",
+      "Thumbprint": "Certificate thumbprint (if applicable)",
+      "ExpiryDate": "Certificate expiry date (if applicable)",
+      "DaysUntilExpiry": "Days remaining until certificate expires",
+      "Message": "Additional details about the event",
+      "Status": "Event status: Success, Warning, Error",
+      "Source": "Always 'WinCertManager'",
+      "Version": "WinCertManager version"
+    }
+  },
+
+  "examples": {
+    "webhookPayload": {
+      "Timestamp": "2024-01-15T10:30:00.000Z",
+      "Hostname": "WEBSERVER01",
+      "EventType": "Renewal",
+      "Domain": "www.example.com",
+      "Thumbprint": "ABC123DEF456...",
+      "ExpiryDate": "2024-04-15T10:30:00.000Z",
+      "DaysUntilExpiry": 90,
+      "Message": "Certificate renewed successfully",
+      "Status": "Success",
+      "Source": "WinCertManager",
+      "Version": "1.0.0"
+    }
+  }
+}

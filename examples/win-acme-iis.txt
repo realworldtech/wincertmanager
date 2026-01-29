@@ -1,0 +1,183 @@
+# win-acme IIS Certificate Configuration Example
+# This shows a typical interactive session for configuring IIS HTTPS
+
+================================================================================
+C:\Tools\win-acme> .\wacs.exe
+================================================================================
+
+A simple Windows ACMEv2 client (WACS)
+Software version x.x.x.x
+Connecting to https://acme-v02.api.letsencrypt.org/...
+
+Please report issues at https://github.com/win-acme/win-acme
+
+ N: Create certificate (default settings)
+ M: Create certificate (full options)
+ R: Run renewals (0 currently due)
+ A: Manage renewals (0 total)
+ O: More options...
+ Q: Quit
+
+Please choose from the menu: M
+
+================================================================================
+ Running in mode: Interactive, Advanced
+================================================================================
+
+ Please specify how the list of domain names that will be included in the
+ certificate should be determined. If you choose for one of the "IIS" options,
+ this plugin will also be able to automatically bind the certificate to your
+ website(s).
+
+ 1: Read bindings from IIS
+ 2: Manual input
+ 3: CSR created by another program
+ 4: Apache-style configuration file
+
+ How shall we determine the domain(s) to include in the certificate?: 1
+
+================================================================================
+ Source plugin: IIS
+================================================================================
+
+ 1: Default Web Site (1 binding)
+ 2: Example Site (2 bindings)
+ 3: API Site (1 binding)
+
+ Choose a site or press <Enter> to select the first: 2
+
+ Continue with this selection? (y*/n): y
+
+ Target generated using plugin IIS: Example Site - 2 bindings found
+
+ Suggested friendly name '[Example Site]', press <Enter> to accept or type a
+ new name: <Enter>
+
+================================================================================
+ Please select which validation plugin should be used.
+================================================================================
+
+ 1: [http-01] Save verification files on (network) path
+ 2: [http-01] Serve verification files from memory
+ 3: [http-01] Serve verification files with self-hosting
+ 4: [dns-01] Create verification records with acme-dns
+ 5: [dns-01] Create verification records with CloudFlare
+ 6: [dns-01] Create verification records manually
+ 7: [tls-alpn-01] Answer TLS-ALPN challenge from memory
+
+ How would you like to validate?: 4
+
+================================================================================
+ Validation plugin: acme-dns
+================================================================================
+
+ URL of the acme-dns API: https://acmedns.realworld.net.au
+
+ Path to a json file containing all CNAME mappings. This will be automatically
+ created the first time the plugin runs. Press <Enter> to accept the default
+ location.
+
+ CNAME mapping file: <Enter>
+
+================================================================================
+ Please select which store plugin(s) should be used.
+================================================================================
+
+ 1: Windows Certificate Store (Local Computer)
+ 2: PEM files (Apache, nginx, etc.)
+ 3: PFX archive
+ 4: Central Certificate Store (IIS)
+ 5: No (additional) store steps
+
+ How would you like to store the certificate(s)?: 1
+
+================================================================================
+ Store plugin: CertificateStore
+================================================================================
+
+ Use the default certificate store? (Computer\WebHosting or Computer\My if
+ WebHosting is unavailable) (y*/n): y
+
+================================================================================
+ Please select which installation plugin(s) should be used.
+================================================================================
+
+ 1: IIS
+ 2: Windows CNG/API
+ 3: Create or update https bindings in IIS
+ 4: Run a custom script
+ 5: Update bindings on FTP site
+ 6: No (additional) installation steps
+
+ Which installation step should run first?: 1
+
+ Add another installation step? (y/n*): n
+
+================================================================================
+ Installation plugin: IIS
+================================================================================
+
+ 1: Default Web Site
+ 2: Example Site
+ 3: API Site
+
+ Choose a web site to bind the certificate to: 2
+
+ Add another site? (y/n*): n
+
+================================================================================
+ Terms of service
+================================================================================
+
+ Open in default application? (y/n*): n
+
+ Do you agree with the terms of service? (y*/n): y
+
+================================================================================
+ Account
+================================================================================
+
+ Enter email address (for notifications about issues and renewals): admin@example.com
+
+================================================================================
+ Creating certificate
+================================================================================
+
+ Authorizing...
+ Authorizing www.example.com using dns-01 validation
+ Waiting for DNS update...
+ ACME validation complete
+ Requesting certificate...
+ Certificate [Example Site] created
+
+================================================================================
+ Installing certificate in store
+================================================================================
+
+ Adding certificate to store WebHosting
+
+================================================================================
+ Installing certificate on IIS
+================================================================================
+
+ Adding new https binding www.example.com:443 to site Example Site
+ Committing 1 change(s) to IIS
+
+================================================================================
+ Certificate installed successfully!
+================================================================================
+
+ Next renewal scheduled at 2024-04-20
+
+================================================================================
+# Command line equivalent for automation:
+#
+# wacs.exe --target iis --siteid 2 ^
+#     --validation acme-dns ^
+#     --acmednsserver "https://acmedns.realworld.net.au" ^
+#     --store certificatestore ^
+#     --installation iis ^
+#     --installationsiteid 2 ^
+#     --emailaddress admin@example.com ^
+#     --accepttos
+================================================================================

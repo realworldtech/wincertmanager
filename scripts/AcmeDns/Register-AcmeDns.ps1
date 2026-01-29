@@ -1,0 +1,245 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Registers a domain with an acme-dns server for DNS-01 validation.
+
+.DESCRIPTION
+    This script registers a new domain with an acme-dns server and stores
+    the credentials securely. It outputs the required CNAME record that
+    must be added to the domain's DNS.
+
+.PARAMETER Domain
+    The domain name to register (e.g., www.example.com).
+
+.PARAMETER AcmeDnsServer
+    The acme-dns server URL. Default: https://acmedns.realworld.net.au
+
+.PARAMETER StorageMethod
+    How to store the credentials: CredentialManager or JsonFile.
+    Default: JsonFile (DPAPI encrypted)
+
+.PARAMETER Force
+    Overwrite existing credentials if they exist.
+
+.EXAMPLE
+    .\Register-AcmeDns.ps1 -Domain 'www.example.com'
+
+.EXAMPLE
+    .\Register-AcmeDns.ps1 -Domain 'mail.example.com' -AcmeDnsServer 'https://auth.acme-dns.io'
+
+.NOTES
+    Author: Real World Technology Solutions
+    Version: 1.0.0
+#>
+
+[CmdletBinding()]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
+    Justification = 'Required for DPAPI encryption of credentials received from acme-dns API')]
+param(
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$Domain,
+
+    [Parameter()]
+    [string]$AcmeDnsServer = 'https://acmedns.realworld.net.au',
+
+    [Parameter()]
+    [ValidateSet('CredentialManager', 'JsonFile')]
+    [string]$StorageMethod = 'JsonFile',
+
+    [Parameter()]
+    [switch]$Force
+)
+
+# Import common functions
+$commonPath = Join-Path $PSScriptRoot '..\Helpers\Common.ps1'
+if (Test-Path $commonPath) {
+    . $commonPath
+}
+else {
+    Write-Error "Common.ps1 not found at: $commonPath"
+    exit 1
+}
+
+# Initialize
+Initialize-WinCertManager
+Write-Log "Registering domain '$Domain' with acme-dns server: $AcmeDnsServer" -Level Info
+
+# Normalize domain
+$Domain = $Domain.ToLower().Trim()
+
+# Check for existing registration
+$credentialFile = Get-SecureCredentialFile -Name $Domain
+
+if ((Test-Path $credentialFile) -and -not $Force) {
+    Write-Log "Credentials already exist for domain '$Domain'. Use -Force to overwrite." -Level Warning
+    Write-Log "Credential file: $credentialFile" -Level Info
+
+    # Load and display existing info
+    try {
+        $existingCreds = Get-AcmeDnsCredential -Domain $Domain
+        Write-Host ''
+        Write-Host 'Existing registration found:' -ForegroundColor Yellow
+        Write-Host "  Subdomain: $($existingCreds.Subdomain)" -ForegroundColor Cyan
+        Write-Host "  Full Name: $($existingCreds.FullDomain)" -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host 'Required CNAME record:' -ForegroundColor Yellow
+        Write-Host "  _acme-challenge.$Domain  CNAME  $($existingCreds.FullDomain)" -ForegroundColor Green
+    }
+    catch {
+        Write-Log "Could not read existing credentials: $($_.Exception.Message)" -Level Warning
+    }
+
+    return
+}
+
+# Ensure TLS 1.2
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# Register with acme-dns server
+$registerUrl = "$($AcmeDnsServer.TrimEnd('/'))/register"
+
+Write-Log "Calling acme-dns register endpoint: $registerUrl" -Level Verbose
+
+try {
+    $response = Invoke-WithRetry -Description 'acme-dns registration' -ScriptBlock {
+        Invoke-RestMethod -Uri $registerUrl -Method Post -ContentType 'application/json' -UseBasicParsing
+    }
+}
+catch {
+    Write-Log "Failed to register with acme-dns server: $($_.Exception.Message)" -Level Error
+    throw
+}
+
+# Validate response
+if (-not $response.subdomain -or -not $response.username -or -not $response.password) {
+    Write-Log 'Invalid response from acme-dns server. Missing required fields.' -Level Error
+    throw 'Invalid acme-dns registration response'
+}
+
+Write-Log 'Registration successful. Storing credentials...' -Level Info
+
+# Prepare credential data
+$credentialData = [PSCustomObject]@{
+    Domain = $Domain
+    AcmeDnsServer = $AcmeDnsServer
+    Subdomain = $response.subdomain
+    FullDomain = $response.fulldomain
+    Username = $response.username
+    Password = $response.password
+    AllowFrom = $response.allowfrom
+    RegisteredAt = (Get-Date).ToString('o')
+}
+
+# Store credentials
+switch ($StorageMethod) {
+    'JsonFile' {
+        # Use DPAPI encryption for the password
+        $securePassword = ConvertTo-SecureString -String $response.password -AsPlainText -Force
+        $encryptedPassword = ConvertFrom-SecureString -SecureString $securePassword
+
+        $storageData = [PSCustomObject]@{
+            Domain = $credentialData.Domain
+            AcmeDnsServer = $credentialData.AcmeDnsServer
+            Subdomain = $credentialData.Subdomain
+            FullDomain = $credentialData.FullDomain
+            Username = $credentialData.Username
+            EncryptedPassword = $encryptedPassword
+            AllowFrom = $credentialData.AllowFrom
+            RegisteredAt = $credentialData.RegisteredAt
+            StorageMethod = 'DPAPI'
+        }
+
+        $storageData | ConvertTo-Json -Depth 5 | Set-Content -Path $credentialFile -Force
+        Write-Log "Credentials stored at: $credentialFile" -Level Info
+    }
+
+    'CredentialManager' {
+        # Store in Windows Credential Manager
+        $targetName = "acme-dns:$Domain"
+
+        # Remove existing credential if present
+        try {
+            cmdkey /delete:$targetName 2>$null | Out-Null
+        }
+        catch {
+            # Ignore errors when credential doesn't exist
+            Write-Verbose "No existing credential to remove: $($_.Exception.Message)"
+        }
+
+        # Add new credential
+        cmdkey /generic:$targetName /user:$($response.username) /pass:$($response.password) | Out-Null
+
+        # Store additional metadata in JSON file
+        $metadataFile = Get-SecureCredentialFile -Name "$Domain.meta"
+        $metadata = [PSCustomObject]@{
+            Domain = $credentialData.Domain
+            AcmeDnsServer = $credentialData.AcmeDnsServer
+            Subdomain = $credentialData.Subdomain
+            FullDomain = $credentialData.FullDomain
+            AllowFrom = $credentialData.AllowFrom
+            RegisteredAt = $credentialData.RegisteredAt
+            StorageMethod = 'CredentialManager'
+            CredentialTarget = $targetName
+        }
+        $metadata | ConvertTo-Json -Depth 5 | Set-Content -Path $metadataFile -Force
+
+        Write-Log "Credentials stored in Windows Credential Manager as: $targetName" -Level Info
+    }
+}
+
+# Output results
+Write-Host ''
+Write-Host '========================================' -ForegroundColor Cyan
+Write-Host '    ACME-DNS REGISTRATION COMPLETE' -ForegroundColor Cyan
+Write-Host '========================================' -ForegroundColor Cyan
+Write-Host ''
+Write-Host 'Registration Details:' -ForegroundColor Yellow
+Write-Host "  Domain:     $Domain" -ForegroundColor White
+Write-Host "  Subdomain:  $($credentialData.Subdomain)" -ForegroundColor White
+Write-Host "  Full Name:  $($credentialData.FullDomain)" -ForegroundColor White
+Write-Host "  Server:     $AcmeDnsServer" -ForegroundColor White
+Write-Host ''
+Write-Host '========================================' -ForegroundColor Green
+Write-Host '  REQUIRED DNS CONFIGURATION' -ForegroundColor Green
+Write-Host '========================================' -ForegroundColor Green
+Write-Host ''
+Write-Host 'Add the following CNAME record to your DNS:' -ForegroundColor Yellow
+Write-Host ''
+Write-Host "  Name:   _acme-challenge.$Domain" -ForegroundColor Cyan
+Write-Host "  Type:   CNAME" -ForegroundColor Cyan
+Write-Host "  Value:  $($credentialData.FullDomain)" -ForegroundColor Cyan
+Write-Host ''
+Write-Host 'Example DNS record (BIND format):' -ForegroundColor Gray
+Write-Host "  _acme-challenge.$Domain.  IN  CNAME  $($credentialData.FullDomain)." -ForegroundColor Gray
+Write-Host ''
+Write-Host '========================================' -ForegroundColor Cyan
+Write-Host ''
+Write-Host 'Next Steps:' -ForegroundColor Yellow
+Write-Host '  1. Add the CNAME record to your DNS provider' -ForegroundColor White
+Write-Host '  2. Wait for DNS propagation (typically 5-30 minutes)' -ForegroundColor White
+Write-Host '  3. Verify with: nslookup -type=CNAME _acme-challenge.$Domain' -ForegroundColor White
+Write-Host '  4. Configure win-acme to use acme-dns validation' -ForegroundColor White
+Write-Host ''
+
+# Log to central logging
+try {
+    $loggingScript = Join-Path $PSScriptRoot '..\Logging\Send-CertificateEvent.ps1'
+    if (Test-Path $loggingScript) {
+        & $loggingScript -EventType 'AcmeDnsRegistration' -Domain $Domain -Message "Registered with acme-dns server $AcmeDnsServer" -Status 'Success'
+    }
+}
+catch {
+    Write-Log "Could not send logging event: $($_.Exception.Message)" -Level Verbose
+}
+
+# Return credential data (without password for security)
+[PSCustomObject]@{
+    Domain = $credentialData.Domain
+    AcmeDnsServer = $credentialData.AcmeDnsServer
+    Subdomain = $credentialData.Subdomain
+    FullDomain = $credentialData.FullDomain
+    CnameRecord = "_acme-challenge.$Domain"
+    CnameTarget = $credentialData.FullDomain
+    RegisteredAt = $credentialData.RegisteredAt
+}

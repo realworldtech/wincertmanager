@@ -1,0 +1,180 @@
+# win-acme RD Gateway Certificate Configuration Example
+# This shows a typical interactive session for configuring RD Gateway HTTPS
+
+================================================================================
+C:\Tools\win-acme> .\wacs.exe
+================================================================================
+
+A simple Windows ACMEv2 client (WACS)
+Software version x.x.x.x
+Connecting to https://acme-v02.api.letsencrypt.org/...
+
+Please report issues at https://github.com/win-acme/win-acme
+
+ N: Create certificate (default settings)
+ M: Create certificate (full options)
+ R: Run renewals (0 currently due)
+ A: Manage renewals (0 total)
+ O: More options...
+ Q: Quit
+
+Please choose from the menu: M
+
+================================================================================
+ Running in mode: Interactive, Advanced
+================================================================================
+
+ Please specify how the list of domain names that will be included in the
+ certificate should be determined.
+
+ 1: Read bindings from IIS
+ 2: Manual input
+ 3: CSR created by another program
+ 4: Apache-style configuration file
+
+ How shall we determine the domain(s) to include in the certificate?: 2
+
+================================================================================
+ Source plugin: Manual
+================================================================================
+
+ Enter comma separated list of host names, starting with the primary one: gateway.example.com
+
+ Target generated using plugin Manual
+
+ Suggested friendly name '[gateway.example.com]', press <Enter> to accept or
+ type a new name: RD Gateway Certificate
+
+================================================================================
+ Please select which validation plugin should be used.
+================================================================================
+
+ 1: [http-01] Save verification files on (network) path
+ 2: [http-01] Serve verification files from memory
+ 3: [http-01] Serve verification files with self-hosting
+ 4: [dns-01] Create verification records with acme-dns
+ 5: [dns-01] Create verification records with CloudFlare
+ 6: [dns-01] Create verification records manually
+ 7: [tls-alpn-01] Answer TLS-ALPN challenge from memory
+
+ How would you like to validate?: 4
+
+================================================================================
+ Validation plugin: acme-dns
+================================================================================
+
+ URL of the acme-dns API: https://acmedns.realworld.net.au
+
+ Path to a json file containing all CNAME mappings: <Enter>
+
+================================================================================
+ Please select which store plugin(s) should be used.
+================================================================================
+
+ 1: Windows Certificate Store (Local Computer)
+ 2: PEM files (Apache, nginx, etc.)
+ 3: PFX archive
+ 4: Central Certificate Store (IIS)
+ 5: No (additional) store steps
+
+ How would you like to store the certificate(s)?: 1
+
+================================================================================
+ Store plugin: CertificateStore
+================================================================================
+
+ Use the default certificate store? (y*/n): y
+
+================================================================================
+ Please select which installation plugin(s) should be used.
+================================================================================
+
+ 1: IIS
+ 2: Windows CNG/API
+ 3: Create or update https bindings in IIS
+ 4: Run a custom script
+ 5: Update bindings on FTP site
+ 6: No (additional) installation steps
+
+ Which installation step should run first?: 4
+
+================================================================================
+ Installation plugin: Script
+================================================================================
+
+ Enter the path to the script you want to run after renewal: C:\Tools\wincertmanager\scripts\PostRenewal\Update-RDGateway.ps1
+
+ Enter the parameters for the script. Refer to https://www.win-acme.com/reference/plugins/installation/script
+ for available placeholders.
+
+ Parameters: -Thumbprint {CertThumbprint} -RestartService
+
+ Add another installation step? (y/n*): n
+
+================================================================================
+ Terms of service
+================================================================================
+
+ Open in default application? (y/n*): n
+
+ Do you agree with the terms of service? (y*/n): y
+
+================================================================================
+ Account
+================================================================================
+
+ Enter email address (for notifications about issues and renewals): admin@example.com
+
+================================================================================
+ Creating certificate
+================================================================================
+
+ Authorizing...
+ Authorizing gateway.example.com using dns-01 validation
+ Waiting for DNS update...
+ ACME validation complete
+ Requesting certificate...
+ Certificate [RD Gateway Certificate] created
+
+================================================================================
+ Installing certificate in store
+================================================================================
+
+ Adding certificate to store My
+
+================================================================================
+ Running installation script
+================================================================================
+
+ Running script C:\Tools\wincertmanager\scripts\PostRenewal\Update-RDGateway.ps1
+ with parameters: -Thumbprint ABC123DEF456... -RestartService
+
+ [2024-01-20 10:30:15] [Info] Starting RD Gateway certificate update
+ [2024-01-20 10:30:15] [Info] Found certificate: CN=gateway.example.com
+ [2024-01-20 10:30:16] [Info] Updating RD Gateway certificate binding...
+ [2024-01-20 10:30:17] [Info] Restarting RD Gateway service...
+ [2024-01-20 10:30:22] [Info] RD Gateway service status after restart: Running
+ [2024-01-20 10:30:22] [Info] Certificate binding updated successfully
+
+ Script finished with exit code 0
+
+================================================================================
+ Certificate installed successfully!
+================================================================================
+
+ Next renewal scheduled at 2024-04-20
+
+================================================================================
+# Command line equivalent for automation:
+#
+# wacs.exe --target manual --host gateway.example.com ^
+#     --friendlyname "RD Gateway Certificate" ^
+#     --validation acme-dns ^
+#     --acmednsserver "https://acmedns.realworld.net.au" ^
+#     --store certificatestore ^
+#     --installation script ^
+#     --script "C:\Tools\wincertmanager\scripts\PostRenewal\Update-RDGateway.ps1" ^
+#     --scriptparameters "-Thumbprint {CertThumbprint} -RestartService" ^
+#     --emailaddress admin@example.com ^
+#     --accepttos
+================================================================================
