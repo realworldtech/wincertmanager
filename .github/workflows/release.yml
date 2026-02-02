@@ -183,8 +183,8 @@ jobs:
           To trust the signing certificate (one-time setup, requires admin):
 
           ``````powershell
-          # Import the public certificate to Trusted Publishers
-          Import-Certificate -FilePath .\certs\rwts-codesign.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+          # Import the public certificate to Trusted Root
+          Import-Certificate -FilePath .\certs\rwts-codesign.cer -CertStoreLocation Cert:\LocalMachine\Root
           ``````
 
           Verify script signatures:
