@@ -19,9 +19,9 @@ Download the latest signed release from [GitHub Releases](https://github.com/rea
 3. Extract to `C:\Tools\wincertmanager` (or your preferred location)
 4. (Optional) To trust the toolkit's code-signing certificate for signature validation:
    ```powershell
-   Import-Certificate -FilePath C:\Tools\wincertmanager\certs\rwts-codesign.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+   Import-Certificate -FilePath C:\Tools\wincertmanager\certs\rwts-codesign.cer -CertStoreLocation Cert:\LocalMachine\Root
    ```
-   Note: `TrustedPublisher` is more appropriate than `Root` - it trusts this certificate for code signing only, not as a CA. Using `LocalMachine` ensures the SYSTEM account (used for scheduled renewals) also trusts the certificate.
+   Note: Using `LocalMachine\Root` ensures full trust for signature validation. The `LocalMachine` store ensures the SYSTEM account (used for scheduled renewals) also trusts the certificate.
 
 ### 1. Prepare the Server
 

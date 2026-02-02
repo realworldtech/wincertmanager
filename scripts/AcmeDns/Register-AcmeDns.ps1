@@ -12,7 +12,12 @@
     The domain name to register (e.g., www.example.com).
 
 .PARAMETER AcmeDnsServer
-    The acme-dns server URL. Default: https://auth.acme-dns.io
+    The acme-dns server URL for registration. Default: https://auth.acme-dns.io
+
+.PARAMETER UpdateServer
+    The acme-dns server URL for TXT record updates. If not specified, defaults
+    to AcmeDnsServer. Use this when the registration API endpoint differs from
+    the update endpoint (e.g., registration at /api but updates at root).
 
 .PARAMETER StorageMethod
     How to store the credentials: CredentialManager or JsonFile.
@@ -38,6 +43,9 @@
 .EXAMPLE
     .\Register-AcmeDns.ps1 -Domain 'dc01.internal.example.com' -ApiKey 'acmedns_xxx' -ApiKeyId 'key_xxx'
 
+.EXAMPLE
+    .\Register-AcmeDns.ps1 -Domain 'www.example.com' -AcmeDnsServer 'https://acmedns.example.com/api' -UpdateServer 'https://acmedns.example.com'
+
 .NOTES
     Author: Real World Technology Solutions
     Version: 1.0.0
@@ -53,6 +61,9 @@ param(
 
     [Parameter()]
     [string]$AcmeDnsServer = 'https://auth.acme-dns.io',
+
+    [Parameter()]
+    [string]$UpdateServer,
 
     [Parameter()]
     [ValidateSet('CredentialManager', 'JsonFile')]
@@ -81,6 +92,14 @@ else {
 # Initialize
 Initialize-WinCertManager
 Write-Log "Registering domain '$Domain' with acme-dns server: $AcmeDnsServer" -Level Info
+
+# Default UpdateServer to AcmeDnsServer if not specified
+if (-not $UpdateServer) {
+    $UpdateServer = $AcmeDnsServer
+}
+elseif ($UpdateServer -ne $AcmeDnsServer) {
+    Write-Log "Using separate update server: $UpdateServer" -Level Info
+}
 
 # Normalize domain
 $Domain = $Domain.ToLower().Trim()
@@ -158,9 +177,10 @@ Write-Log 'Registration successful. Storing credentials...' -Level Info
 $securePassword = ConvertTo-SecureString -String $response.password -AsPlainText -Force
 
 # Prepare credential metadata (no plaintext password stored in this object)
+# Note: AcmeDnsServer stores the UPDATE server URL (used by Update-AcmeDnsTxt.ps1)
 $credentialData = [PSCustomObject]@{
     Domain = $Domain
-    AcmeDnsServer = $AcmeDnsServer
+    AcmeDnsServer = $UpdateServer
     Subdomain = $response.subdomain
     FullDomain = $response.fulldomain
     Username = $response.username
@@ -234,7 +254,10 @@ Write-Host 'Registration Details:' -ForegroundColor Yellow
 Write-Host "  Domain:     $Domain" -ForegroundColor White
 Write-Host "  Subdomain:  $($credentialData.Subdomain)" -ForegroundColor White
 Write-Host "  Full Name:  $($credentialData.FullDomain)" -ForegroundColor White
-Write-Host "  Server:     $AcmeDnsServer" -ForegroundColor White
+Write-Host "  Register:   $AcmeDnsServer" -ForegroundColor White
+if ($UpdateServer -ne $AcmeDnsServer) {
+    Write-Host "  Update:     $UpdateServer" -ForegroundColor White
+}
 Write-Host ''
 Write-Host '========================================' -ForegroundColor Green
 Write-Host '  REQUIRED DNS CONFIGURATION' -ForegroundColor Green
@@ -272,7 +295,8 @@ catch {
 # Return credential data (without password for security)
 [PSCustomObject]@{
     Domain = $credentialData.Domain
-    AcmeDnsServer = $credentialData.AcmeDnsServer
+    RegisterServer = $AcmeDnsServer
+    UpdateServer = $UpdateServer
     Subdomain = $credentialData.Subdomain
     FullDomain = $credentialData.FullDomain
     CnameRecord = "_acme-challenge.$Domain"

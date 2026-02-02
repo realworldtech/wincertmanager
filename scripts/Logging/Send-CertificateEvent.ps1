@@ -92,7 +92,7 @@ if (-not $ConfigPath) {
     )
 
     foreach ($path in $possiblePaths) {
-        if (Test-Path $path) {
+        if (Test-Path -Path $path -PathType Leaf) {
             $ConfigPath = $path
             break
         }
@@ -101,7 +101,7 @@ if (-not $ConfigPath) {
 
 # Load configuration
 $config = $null
-if ($ConfigPath -and (Test-Path $ConfigPath)) {
+if ($ConfigPath -and (Test-Path -Path $ConfigPath -PathType Leaf)) {
     # SECURITY: Validate ConfigPath is within allowed directories
     $resolvedPath = (Resolve-Path $ConfigPath -ErrorAction SilentlyContinue).Path
     $isAllowed = $false
