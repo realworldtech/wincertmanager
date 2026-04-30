@@ -389,7 +389,7 @@ if ($PSCmdlet.ShouldProcess($credentialFile, 'Re-encrypt acme-dns credential und
     Write-Host "Backup written: $credBackup" -ForegroundColor Yellow
 
     $newJson = ([PSCustomObject]$newData) | ConvertTo-Json -Depth 5
-    Set-Content -LiteralPath $credentialFile -Value $newJson -Force
+    Set-Content -LiteralPath $credentialFile -Value $newJson -Encoding UTF8 -Force
     Write-Host "Credential repaired: $credentialFile" -ForegroundColor Green
 }
 
