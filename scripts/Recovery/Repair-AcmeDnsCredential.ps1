@@ -30,7 +30,11 @@
 
 .PARAMETER Domain
     The domain whose credential needs repairing
-    (e.g., "dc01.internal.example.com").
+    (e.g., "dc01.internal.example.com"). Optional: when omitted and the
+    credential store contains exactly one registration, that domain is
+    auto-detected. If multiple registrations exist, -Domain is required.
+    Useful for unattended runs from RMM platforms on hosts that hold a
+    single acme-dns credential.
 
 .PARAMETER Password
     SecureString containing the acme-dns password. If omitted, the script
@@ -56,11 +60,17 @@
     Get-AcmeDnsCredential.ps1).
 
 .EXAMPLE
-    .\Repair-AcmeDnsCredential.ps1 -Domain "syd03-ad01.internal.thecore.net.au"
+    .\Repair-AcmeDnsCredential.ps1 -Domain "dc01.internal.example.com"
 
 .EXAMPLE
     $pw = Read-Host -AsSecureString
     .\Repair-AcmeDnsCredential.ps1 -Domain "dc01.example.com" -Password $pw -WhatIf
+
+.EXAMPLE
+    # Unattended single-domain host (e.g., from an RMM platform): auto-detects
+    # the domain from the credential store and avoids confirmation prompts.
+    $pw = ConvertTo-SecureString $env:ACMEDNS_PASSWORD -AsPlainText -Force
+    .\Repair-AcmeDnsCredential.ps1 -Password $pw -Confirm:$false
 
 .NOTES
     Author: Real World Technology Solutions
@@ -73,8 +83,7 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'CredentialPath',
     Justification = 'CredentialPath is a filesystem path to the credential storage directory, not a password.')]
 param(
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
+    [Parameter()]
     [string]$Domain,
 
     [Parameter()]
@@ -100,6 +109,34 @@ Add-Type -AssemblyName System.Security
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
+function Resolve-DomainFromCredentialStore {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw "Credential directory not found: $Path. Pass -Domain explicitly or specify -CredentialPath."
+    }
+
+    # Exclude .meta.json (Credential Manager metadata) and our own .bak.* backups.
+    $files = Get-ChildItem -LiteralPath $Path -Filter '*.json' -File -ErrorAction Stop |
+        Where-Object { $_.Name -notmatch '\.meta\.json$' }
+
+    if ($files.Count -eq 0) {
+        throw "No acme-dns credential files found in '$Path'. Register a domain with Register-AcmeDns.ps1 first, or pass -Domain to point at a specific file."
+    }
+
+    if ($files.Count -gt 1) {
+        $list = ($files | ForEach-Object { ' - ' + [System.IO.Path]::GetFileNameWithoutExtension($_.Name) }) -join "`n"
+        throw "Multiple acme-dns credentials found in '$Path'. Specify -Domain to choose one:`n$list"
+    }
+
+    return [System.IO.Path]::GetFileNameWithoutExtension($files[0].Name)
+}
 
 function Find-ToolkitPath {
     [CmdletBinding()]
@@ -249,6 +286,11 @@ elseif (-not $SkipToolkitPatch) {
 
 if (-not $CredentialPath) {
     $CredentialPath = Join-Path $env:ProgramData 'WinCertManager\Config\acme-dns'
+}
+
+if (-not $Domain) {
+    $Domain = Resolve-DomainFromCredentialStore -Path $CredentialPath
+    Write-Host "Auto-detected domain: $Domain" -ForegroundColor Cyan
 }
 
 $normalizedDomain = $Domain.ToLower().Trim()
