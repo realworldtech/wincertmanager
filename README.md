@@ -248,6 +248,37 @@ When running on a Domain Controller or server using internal DNS, win-acme's pre
 
 This tells win-acme to use Google/Cloudflare DNS for checking TXT records instead of the system's DNS.
 
+### Renewals Silently Failing (Legacy DPAPI Scope)
+
+Toolkit versions ≤ v1.0.1 stored acme-dns credentials using DPAPI in `CurrentUser` scope, but the win-acme renewal scheduled task runs as `SYSTEM`. SYSTEM cannot decrypt CurrentUser-scoped DPAPI blobs, so every automatic renewal fails inside `Get-AcmeDnsCredential.ps1` and the certificate eventually expires without anyone being paged.
+
+**Symptoms:**
+- `Get-ScheduledTask -TaskName 'win-acme*' | Get-ScheduledTaskInfo` shows `LastTaskResult` of `4294967295` (`0xFFFFFFFF`)
+- `%ProgramData%\win-acme\acme-v02.api.letsencrypt.org\Log\log-*.txt` contains `ConvertTo-SecureString : ... CryptographicException` and `Failed to decrypt password. This usually means the credential was stored by a different user or on a different machine.`
+- The credential JSON in `%ProgramData%\WinCertManager\Config\acme-dns\` reports `"StorageMethod": "DPAPI"`
+
+**Fix:** `scripts/Recovery/Repair-AcmeDnsCredential.ps1` re-encrypts the credential under DPAPI `LocalMachine` scope (so SYSTEM can decrypt it) without changing the acme-dns subdomain registration — no DNS changes required. Run it once per affected host. Toolkit ≥ v1.0.2 stores new credentials in `LocalMachine` scope by default, so fresh installs are unaffected.
+
+> **Verify the script before running it.** Open it in a text editor or run `Get-AuthenticodeSignature` against a copy from a signed release ZIP. The script will prompt for the original acme-dns password (the `password` field returned by `/register`, retrievable from your password manager).
+
+```powershell
+# On the affected host, in an elevated PowerShell session:
+$url = 'https://raw.githubusercontent.com/realworldtech/wincertmanager/main/scripts/Recovery/Repair-AcmeDnsCredential.ps1'
+$dest = Join-Path $env:TEMP 'Repair-AcmeDnsCredential.ps1'
+Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+
+# REVIEW the file before executing:
+notepad $dest
+
+# Then run for the affected domain (will prompt for the acme-dns password):
+& $dest -Domain 'dc01.internal.example.com'
+
+# After repair, force a renewal to confirm:
+& 'C:\Tools\win-acme\wacs.exe' --renew --force --verbose
+```
+
+If you prefer a signed copy, download the latest release ZIP from the [Releases page](https://github.com/realworldtech/wincertmanager/releases), verify the SHA256, and run the script from `scripts/Recovery/` inside the extracted directory.
+
 See [docs/troubleshooting.md](docs/troubleshooting.md) for more common issues.
 
 ## Documentation
