@@ -90,8 +90,16 @@ else {
     exit 1
 }
 
-# DPAPI LocalMachine scope requires System.Security.dll
-Add-Type -AssemblyName System.Security
+# DPAPI LocalMachine encrypt path needs [ProtectedData] from System.Security.dll.
+# Failure to load is fatal; surface it loudly so the operator gets a clear
+# error rather than a missing-type exception further down.
+try {
+    Add-Type -AssemblyName System.Security -ErrorAction Stop
+}
+catch {
+    Write-Error "Failed to load required assembly 'System.Security'. DPAPI-based credential protection is unavailable: $($_.Exception.Message)"
+    exit 1
+}
 
 # Initialize
 Initialize-WinCertManager
@@ -199,12 +207,26 @@ switch ($StorageMethod) {
         # SYSTEM, which runs the win-acme renewal task) can decrypt. Without
         # this, a renewal triggered by SYSTEM cannot read credentials that
         # were registered by an interactive operator.
+        #
+        # The plaintext password is copied directly out of the BSTR as raw
+        # UTF-16 bytes and transcoded to UTF-8 via Encoding.Convert. We avoid
+        # creating a managed System.String (e.g., via PtrToStringBSTR) so
+        # there is no garbage-collected immutable plaintext copy lingering
+        # in memory after this block exits.
         $bstr = [IntPtr]::Zero
+        $utf16Bytes = $null
         $plainBytes = $null
         try {
             $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
-            $plainText = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-            $plainBytes = [System.Text.Encoding]::UTF8.GetBytes($plainText)
+            # BSTR length-in-bytes prefix lives 4 bytes before the pointer.
+            $byteCount = [System.Runtime.InteropServices.Marshal]::ReadInt32($bstr, -4)
+            $utf16Bytes = New-Object byte[] $byteCount
+            [System.Runtime.InteropServices.Marshal]::Copy($bstr, $utf16Bytes, 0, $byteCount)
+            $plainBytes = [System.Text.Encoding]::Convert(
+                [System.Text.Encoding]::Unicode,
+                [System.Text.Encoding]::UTF8,
+                $utf16Bytes
+            )
 
             $protected = [System.Security.Cryptography.ProtectedData]::Protect(
                 $plainBytes, $null,
@@ -213,6 +235,7 @@ switch ($StorageMethod) {
             $encryptedPassword = [Convert]::ToBase64String($protected)
         }
         finally {
+            if ($null -ne $utf16Bytes) { [Array]::Clear($utf16Bytes, 0, $utf16Bytes.Length) }
             if ($null -ne $plainBytes) { [Array]::Clear($plainBytes, 0, $plainBytes.Length) }
             if ($bstr -ne [IntPtr]::Zero) {
                 [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)

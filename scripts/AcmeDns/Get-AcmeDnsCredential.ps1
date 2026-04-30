@@ -53,8 +53,16 @@ else {
     exit 1
 }
 
-# DPAPI LocalMachine scope requires System.Security.dll
-Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+# DPAPI LocalMachine decrypt path needs [ProtectedData] from System.Security.dll.
+# Failure to load is fatal; surface it loudly rather than letting the type
+# lookup fail with a confusing error later.
+try {
+    Add-Type -AssemblyName System.Security -ErrorAction Stop
+}
+catch {
+    Write-Error "Failed to load required assembly 'System.Security'. DPAPI-based credential decryption is unavailable: $($_.Exception.Message)"
+    exit 1
+}
 
 Initialize-WinCertManager
 

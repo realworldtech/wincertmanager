@@ -188,7 +188,7 @@ if (Test-Path $commonPath) {
 
 ## Positive Security Practices Observed
 
-1. **DPAPI Encryption** - Credentials are encrypted using Windows DPAPI in `LocalMachine` scope, so any account on the host (including the SYSTEM-context renewal task) can decrypt while attackers without local access cannot. Legacy `CurrentUser` scope blobs are still decrypted for backwards compatibility.
+1. **DPAPI Encryption** - Credentials are encrypted using Windows DPAPI in `LocalMachine` scope, which allows any local account on the host (including the SYSTEM-context renewal task) to decrypt a blob if it can read it. As a result, confidentiality depends heavily on NTFS ACLs on the credential files/directories being locked down appropriately (ideally to `SYSTEM` and `Administrators`) so unprivileged local users cannot access the encrypted blobs. Legacy `CurrentUser` scope blobs are still decrypted for backwards compatibility.
 2. **TLS 1.2 Enforcement** - All network communications explicitly set TLS 1.2 minimum
 3. **Administrator Requirements** - Scripts that require elevated privileges declare `#Requires -RunAsAdministrator`
 4. **Parameter Validation** - Proper use of `ValidateSet`, `ValidateNotNullOrEmpty` attributes
