@@ -250,14 +250,14 @@ This tells win-acme to use Google/Cloudflare DNS for checking TXT records instea
 
 ### Renewals Silently Failing (Legacy DPAPI Scope)
 
-Toolkit versions ≤ v1.0.1 stored acme-dns credentials using DPAPI in `CurrentUser` scope, but the win-acme renewal scheduled task runs as `SYSTEM`. SYSTEM cannot decrypt CurrentUser-scoped DPAPI blobs, so every automatic renewal fails inside `Get-AcmeDnsCredential.ps1` and the certificate eventually expires without anyone being paged.
+Toolkit versions ≤ v1.0.3 stored acme-dns credentials using DPAPI in `CurrentUser` scope, but the win-acme renewal scheduled task runs as `SYSTEM`. SYSTEM cannot decrypt CurrentUser-scoped DPAPI blobs, so every automatic renewal fails inside `Get-AcmeDnsCredential.ps1` and the certificate eventually expires without anyone being paged.
 
 **Symptoms:**
 - `Get-ScheduledTask -TaskName 'win-acme*' | Get-ScheduledTaskInfo` shows `LastTaskResult` of `4294967295` (`0xFFFFFFFF`)
 - `%ProgramData%\win-acme\acme-v02.api.letsencrypt.org\Log\log-*.txt` contains `ConvertTo-SecureString : ... CryptographicException` and `Failed to decrypt password. This usually means the credential was stored by a different user or on a different machine.`
 - The credential JSON in `%ProgramData%\WinCertManager\Config\acme-dns\` reports `"StorageMethod": "DPAPI"`
 
-**Fix:** `scripts/Recovery/Repair-AcmeDnsCredential.ps1` re-encrypts the credential under DPAPI `LocalMachine` scope (so SYSTEM can decrypt it) without changing the acme-dns subdomain registration — no DNS changes required. Run it once per affected host. Toolkit ≥ v1.0.2 stores new credentials in `LocalMachine` scope by default, so fresh installs are unaffected.
+**Fix:** `scripts/Recovery/Repair-AcmeDnsCredential.ps1` re-encrypts the credential under DPAPI `LocalMachine` scope (so SYSTEM can decrypt it) without changing the acme-dns subdomain registration — no DNS changes required. Run it once per affected host. Toolkit ≥ v1.0.4 stores new credentials in `LocalMachine` scope by default, so fresh installs are unaffected.
 
 > **Verify the script before running it.** Open it in a text editor or run `Get-AuthenticodeSignature` against a copy from a signed release ZIP. The script will prompt for the original acme-dns password (the `password` field returned by `/register`, retrievable from your password manager).
 

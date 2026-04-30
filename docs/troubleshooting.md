@@ -188,7 +188,7 @@ The renewal log will show the error inside `Get-AcmeDnsCredential.ps1` while run
 
 **Causes:**
 
-1. **Legacy DPAPI scope mismatch** — credentials were registered with toolkit ≤ v1.0.1 (which used DPAPI CurrentUser scope) by an interactive operator, but the renewal task runs as SYSTEM and cannot decrypt them. The `StorageMethod` in the credential JSON file will be `DPAPI`. **This is the most common cause** and certificates will silently fail to renew until they expire.
+1. **Legacy DPAPI scope mismatch** — credentials were registered with toolkit ≤ v1.0.3 (which used DPAPI CurrentUser scope) by an interactive operator, but the renewal task runs as SYSTEM and cannot decrypt them. The `StorageMethod` in the credential JSON file will be `DPAPI`. **This is the most common cause** and certificates will silently fail to renew until they expire.
 2. Credentials created on a different machine (DPAPI keys are host-bound).
 3. Corrupted credential file.
 
@@ -207,7 +207,7 @@ After the repair, force a renewal to confirm:
 C:\Tools\win-acme\wacs.exe --renew --force --verbose
 ```
 
-Toolkit ≥ v1.0.2 registers new credentials with `StorageMethod = DPAPI-LocalMachine` by default, so this issue does not affect fresh installs. Existing legacy installs only need the repair script run once.
+Toolkit ≥ v1.0.4 registers new credentials with `StorageMethod = DPAPI-LocalMachine` by default, so this issue does not affect fresh installs. Existing legacy installs only need the repair script run once.
 
 For other causes, re-register from scratch (this generates a new acme-dns subdomain UUID and requires updating the external CNAME):
 
