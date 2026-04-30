@@ -9,6 +9,10 @@ config/acme-dns/*.json
 # Local development files (certificates, passwords, etc.)
 .local/
 
+# Claude Code local files (per-developer overrides; never commit)
+CLAUDE.local.md
+.claude/settings.local.json
+
 # Windows/PowerShell artifacts
 *.log
 *.tmp
