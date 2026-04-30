@@ -21,7 +21,8 @@
 
 .PARAMETER StorageMethod
     How to store the credentials: CredentialManager or JsonFile.
-    Default: JsonFile (DPAPI encrypted)
+    Default: JsonFile (DPAPI encrypted, machine scope so SYSTEM-context
+    renewal tasks can decrypt).
 
 .PARAMETER ApiKey
     API key for authenticated acme-dns servers. Required for RWTS acme-dns.
@@ -88,6 +89,9 @@ else {
     Write-Error "Common.ps1 not found at: $commonPath"
     exit 1
 }
+
+# DPAPI LocalMachine scope requires System.Security.dll
+Add-Type -AssemblyName System.Security
 
 # Initialize
 Initialize-WinCertManager
@@ -191,8 +195,29 @@ $credentialData = [PSCustomObject]@{
 # Store credentials
 switch ($StorageMethod) {
     'JsonFile' {
-        # Use DPAPI encryption for the password
-        $encryptedPassword = ConvertFrom-SecureString -SecureString $securePassword
+        # DPAPI machine-scope encryption: any account on this host (including
+        # SYSTEM, which runs the win-acme renewal task) can decrypt. Without
+        # this, a renewal triggered by SYSTEM cannot read credentials that
+        # were registered by an interactive operator.
+        $bstr = [IntPtr]::Zero
+        $plainBytes = $null
+        try {
+            $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+            $plainText = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+            $plainBytes = [System.Text.Encoding]::UTF8.GetBytes($plainText)
+
+            $protected = [System.Security.Cryptography.ProtectedData]::Protect(
+                $plainBytes, $null,
+                [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+            )
+            $encryptedPassword = [Convert]::ToBase64String($protected)
+        }
+        finally {
+            if ($null -ne $plainBytes) { [Array]::Clear($plainBytes, 0, $plainBytes.Length) }
+            if ($bstr -ne [IntPtr]::Zero) {
+                [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+            }
+        }
 
         $storageData = [PSCustomObject]@{
             Domain = $credentialData.Domain
@@ -203,7 +228,7 @@ switch ($StorageMethod) {
             EncryptedPassword = $encryptedPassword
             AllowFrom = $credentialData.AllowFrom
             RegisteredAt = $credentialData.RegisteredAt
-            StorageMethod = 'DPAPI'
+            StorageMethod = 'DPAPI-LocalMachine'
         }
 
         $storageData | ConvertTo-Json -Depth 5 | Set-Content -Path $credentialFile -Force

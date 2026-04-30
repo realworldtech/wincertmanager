@@ -29,6 +29,8 @@
 #>
 
 [CmdletBinding(DefaultParameterSetName = 'Single')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
+    Justification = 'Wraps a password decrypted from DPAPI back into a SecureString for the non-AsPlainText return path.')]
 param(
     [Parameter(Mandatory = $true, ParameterSetName = 'Single')]
     [ValidateNotNullOrEmpty()]
@@ -50,6 +52,9 @@ else {
     Write-Error "Common.ps1 not found at: $commonPath"
     exit 1
 }
+
+# DPAPI LocalMachine scope requires System.Security.dll
+Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
 
 Initialize-WinCertManager
 
@@ -126,8 +131,39 @@ catch {
 $password = $null
 
 switch ($storedData.StorageMethod) {
+    'DPAPI-LocalMachine' {
+        # Machine-scoped DPAPI: any account on this host (including SYSTEM)
+        # can decrypt. This is the default for credentials registered by
+        # current toolkit versions.
+        $plainBytes = $null
+        try {
+            $protectedBytes = [Convert]::FromBase64String($storedData.EncryptedPassword)
+            $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
+                $protectedBytes, $null,
+                [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+            )
+            $plainText = [System.Text.Encoding]::UTF8.GetString($plainBytes)
+            if ($AsPlainText) {
+                $password = $plainText
+            }
+            else {
+                $password = ConvertTo-SecureString -String $plainText -AsPlainText -Force
+            }
+        }
+        catch {
+            Write-Error "Failed to decrypt password (LocalMachine DPAPI): $($_.Exception.Message)"
+            return $null
+        }
+        finally {
+            if ($null -ne $plainBytes) { [Array]::Clear($plainBytes, 0, $plainBytes.Length) }
+        }
+    }
+
     'DPAPI' {
-        # Decrypt password from DPAPI
+        # Legacy CurrentUser-scoped DPAPI. Only the user that registered the
+        # domain can decrypt. If the renewal task runs as SYSTEM, decryption
+        # will fail here; use scripts\Recovery\Repair-AcmeDnsCredential.ps1
+        # to migrate to DPAPI-LocalMachine.
         try {
             $securePassword = ConvertTo-SecureString -String $storedData.EncryptedPassword
             if ($AsPlainText) {
@@ -140,7 +176,7 @@ switch ($storedData.StorageMethod) {
             }
         }
         catch {
-            Write-Error "Failed to decrypt password. This usually means the credential was stored by a different user or on a different machine."
+            Write-Error "Failed to decrypt password. This usually means the credential was stored by a different user or on a different machine. Run scripts\Recovery\Repair-AcmeDnsCredential.ps1 to migrate to machine-scope DPAPI."
             return $null
         }
     }
